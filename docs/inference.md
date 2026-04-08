@@ -20,15 +20,19 @@ python bench.py --bits 4        # int4 quantized
 |-------|-----|----------|
 | fp32, no KV cache | 38.7 | 1536 MB |
 | fp32 + KV cache | 242.6 | 802 MB |
-| int4 + KV cache | ~580 | 188 MB |
+| int4 + KV cache | ~630 | 188 MB |
 
-Note: int4 TPS varies ~10% run-to-run due to system scheduling; 580 is a representative figure.
+Note: int4 TPS varies ~10% run-to-run due to system scheduling; 630 is a representative figure.
 
 ## KV cache
 
 Prefill: process full prompt once, build K/V cache per layer.
 Decode: pass only the new token each step — O(1) attention instead of O(n²).
 Positional embeddings use the correct offset derived from cache size.
+
+## Attention
+
+`mx.fast.scaled_dot_product_attention(q, k, v, scale=s, mask="causal")` replaces the manual `q @ k^T → softmax → @ v` path. MLX selects `sdpa_vector` for decode (T=1, head_dim=64) — online softmax, no intermediate `[B,H,T,T]` score matrix. ~8–11% TPS gain vs manual attention.
 
 ## Positional encoding: RoPE
 
@@ -54,7 +58,9 @@ Parity tested against PyTorch CPU at `atol=1e-6` (max observed diff ~5e-7, from 
 
 ### Planned
 
-- LUT dequantization: precompute 16-entry float table per block, replace multiply-add with register lookup.
-- Separate prefill/decode attention kernels: prefill is compute-bound, decode is memory-bound — different optimal tiling strategies.
-- Flash attention for prefill: fused QK^T matmul + softmax + V matmul to reduce HBM traffic.
-- Custom int4 GEMV: naive simdgroup-reduction kernel benchmarked at parity with MLX's built-in (~490 TPS both ways). MLX's `quantized_matmul` is already close to bandwidth-optimal. A threadgroup-tiled kernel that maximises DRAM burst width could still help; deferred.
+- Pre-allocated KV cache: eliminate per-step `mx.concatenate` (copies ~18.9 MB/token at T=512; ~10% of M4 BW budget). Pre-allocate `[1, H, max_T, D]`, use slice assignment per step.
+- `mx.compile()` on inference loop: 10–30% expected gain with zero model changes.
+- GQA (n_kv_heads=4): 3× smaller KV cache, 20–40% decode TPS gain; requires retraining.
+- Dedicated decode GEMV kernel: explicit SIMD-group reduction over KV sequence; 10–20% end-to-end after GQA shrinks KV size.
+- Custom int4 GEMV: naive simdgroup-reduction kernel benchmarked at parity with MLX's built-in (~490 TPS both ways). MLX's `quantized_matmul` is already close to bandwidth-optimal. Deferred.
+- LUT dequantization: cache-unfriendly on Apple unified memory — confirmed slower than scale+bias on M-series. Will not implement.

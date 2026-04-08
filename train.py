@@ -78,11 +78,7 @@ SAMPLE_PROMPTS = _val_prompts(N_SAMPLE_PROMPTS, PROMPT_TOKENS)
 # ── Muon optimizer ────────────────────────────────────────────────────────────
 
 def zeropower_via_newtonschulz5(G: torch.Tensor, steps: int = 5) -> torch.Tensor:
-    """
-    Orthogonalize G via Newton-Schulz iteration (5 steps, cubic convergence).
-    Returns a matrix with unit spectral norm.
-    Coefficients from the Muon paper ensure convergence to the polar factor.
-    """
+    """Coefficients from the Muon paper ensure convergence to the polar factor."""
     assert G.ndim >= 2
     a, b, c = 3.4445, -4.7750, 2.0315
     # bfloat16 on CUDA for speed; float32 elsewhere (MPS, CPU)
@@ -100,15 +96,7 @@ def zeropower_via_newtonschulz5(G: torch.Tensor, steps: int = 5) -> torch.Tensor
 
 
 class Muon(torch.optim.Optimizer):
-    """
-    Muon — MomentUm Orthogonalized by Newton-Schulz.
-
-    Applies orthogonalized gradient updates to 2-D weight matrices inside
-    transformer blocks (attention projections, MLP weights). 1-D params and
-    embeddings should use a separate AdamW optimizer.
-
-    Reference: https://github.com/KellerJordan/Muon
-    """
+    """Reference: https://github.com/KellerJordan/Muon"""
     def __init__(self, params, lr: float = 0.02, momentum: float = 0.95,
                  nesterov: bool = True, ns_steps: int = 5):
         defaults = dict(lr=lr, momentum=momentum, nesterov=nesterov, ns_steps=ns_steps)
@@ -128,7 +116,6 @@ class Muon(torch.optim.Optimizer):
                     state["buf"] = torch.zeros_like(g)
                 buf = state["buf"]
                 buf.mul_(momentum).add_(g)
-                # Nesterov: use look-ahead gradient
                 update = g.add(buf, alpha=momentum) if nesterov else buf.clone()
                 if update.ndim == 2:
                     # Orthogonalize via Newton-Schulz, then scale to match
@@ -186,10 +173,11 @@ def save_checkpoint(step):
         "optim_muon": optim_muon.state_dict(),
         "optim_adam": optim_adam.state_dict(),
     }
-    torch.save(ckpt, CKPT_NAME)
+    buf = io.BytesIO()
+    torch.save(ckpt, buf)
+    with open(CKPT_NAME, "wb") as f:
+        f.write(buf.getbuffer())
     if hf:
-        buf = io.BytesIO()
-        torch.save(ckpt, buf)
         buf.seek(0)
         hf.upload_file(path_or_fileobj=buf, path_in_repo=CKPT_NAME,
                        repo_id=HF_REPO, repo_type="model")

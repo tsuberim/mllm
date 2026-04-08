@@ -33,6 +33,10 @@ Keep `docs/` up-to-date whenever anything changes:
 
 Update benchmarks whenever a new optimisation is measured. Update planned-work sections when something ships.
 
+## Research
+
+At the start of each conversation, read `research/index.md` to load context on prior research.
+
 ## Non-goals
 
 - Training on MPS

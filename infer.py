@@ -85,7 +85,7 @@ _rope2_kernel = mx.fast.metal_kernel(
     """,
 )
 
-_rope2_params_cache: dict = {}  # (D, T) → params array
+_rope2_params_cache: dict = {}   # (D, T) → params array
 
 def rope2(q: mx.array, k: mx.array, cos: mx.array, sin: mx.array):
     """Apply RoPE to q and k in one Metal dispatch."""
@@ -141,7 +141,6 @@ class Attention(nn.Module):
         self.n_head   = cfg.n_head
         self.head_dim = cfg.n_embd // cfg.n_head
         self.scale    = self.head_dim ** -0.5
-        self._rope_hd  = self.head_dim
         self._rope_len = cfg.block_size
         self.qkv  = nn.Linear(cfg.n_embd, 3 * cfg.n_embd, bias=False)
         self.proj = nn.Linear(cfg.n_embd, cfg.n_embd, bias=False)
@@ -154,7 +153,7 @@ class Attention(nn.Module):
         v = v.reshape(B, T, self.n_head, self.head_dim).transpose(0, 2, 1, 3)
 
         past_len = cache[0].shape[2] if cache is not None else 0
-        cos, sin = get_rope_slice(self._rope_hd, self._rope_len, past_len, T)
+        cos, sin = get_rope_slice(self.head_dim, self._rope_len, past_len, T)
         q, k = rope2(q, k, cos, sin)
 
         if cache is not None:
@@ -162,15 +161,9 @@ class Attention(nn.Module):
             k = mx.concatenate([past_k, k], axis=2)
             v = mx.concatenate([past_v, v], axis=2)
 
-        scores = (q @ k.swapaxes(-2, -1)) * self.scale  # [B, H, T, S]
-
-        # causal mask only needed during prefill (T > 1);
-        # during decode T == 1 and the single query attends to all past freely
-        if T > 1:
-            mask = mx.tril(mx.ones((T, T), dtype=mx.bool_))
-            scores = mx.where(mask, scores, mx.full(scores.shape, float("-inf")))
-
-        y = (mx.softmax(scores, axis=-1) @ v).transpose(0, 2, 1, 3).reshape(B, T, C)
+        y = mx.fast.scaled_dot_product_attention(
+            q, k, v, scale=self.scale, mask="causal"
+        ).transpose(0, 2, 1, 3).reshape(B, T, C)
         return self.proj(y), (k, v)
 
 
