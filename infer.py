@@ -34,6 +34,77 @@ def swiglu(gate: mx.array, up: mx.array) -> mx.array:
     )[0]
 
 
+# ── RoPE ──────────────────────────────────────────────────────────────────────
+# Fused Metal kernel: reads x and cos/sin once, writes rotated x in one pass.
+# Avoids the 4+ separate kernel dispatches that rotate_half+apply_rope would
+# generate (slice, negate, concat, two multiplies, add) — critical for decode
+# where T=1 and per-launch overhead dominates.
+
+_rope_cache: dict = {}  # (head_dim, max_seq_len) → (cos, sin); shared across layers
+
+def get_rope_freqs(head_dim: int, max_seq_len: int, theta: float = 10000.0):
+    key = (head_dim, max_seq_len)
+    if key not in _rope_cache:
+        freqs = 1.0 / (theta ** (mx.arange(0, head_dim, 2).astype(mx.float32) / head_dim))
+        t     = mx.arange(max_seq_len, dtype=mx.float32)
+        freqs = mx.outer(t, freqs)
+        emb   = mx.concatenate([freqs, freqs], axis=-1)  # [T, D]
+        cos, sin = mx.cos(emb), mx.sin(emb)
+        mx.eval(cos, sin)
+        _rope_cache[key] = (cos, sin)
+    return _rope_cache[key]
+
+def get_rope_slice(head_dim: int, max_seq_len: int, past_len: int, T: int):
+    # No slice cache — caching creates accumulating stale MLX nodes that slow
+    # down MLX's memory manager over the decode sequence. The base freqs are
+    # already cached; a fresh slice each call is cheap and stays GC'd promptly.
+    cos, sin = get_rope_freqs(head_dim, max_seq_len)
+    return cos[past_len:past_len+T], sin[past_len:past_len+T]
+
+# Fused q+k RoPE kernel: one Metal dispatch per layer instead of two.
+# rotate_half convention:
+#   d < D/2 → out[d] = x[d]*cos[d] - x[d+D/2]*sin[d]
+#   d ≥ D/2 → out[d] = x[d]*cos[d] + x[d-D/2]*sin[d]
+_rope2_kernel = mx.fast.metal_kernel(
+    name="rope2",
+    input_names=["q", "k", "cos_vals", "sin_vals", "params"],
+    output_names=["q_out", "k_out"],
+    source="""
+        uint elem  = thread_position_in_grid.x;
+        uint D     = params[0];
+        uint T     = params[1];
+        uint d     = elem % D;
+        uint t     = (elem / D) % T;
+        uint hd    = D / 2;
+        float c    = cos_vals[t * D + d];
+        float s    = sin_vals[t * D + d];
+        uint  pair = (d < hd) ? elem + hd : elem - hd;
+        float sgn  = (d < hd) ? -1.0f : 1.0f;
+        q_out[elem] = q[elem] * c + sgn * q[pair] * s;
+        k_out[elem] = k[elem] * c + sgn * k[pair] * s;
+    """,
+)
+
+_rope2_params_cache: dict = {}  # (D, T) → params array
+
+def rope2(q: mx.array, k: mx.array, cos: mx.array, sin: mx.array):
+    """Apply RoPE to q and k in one Metal dispatch."""
+    *_, T, D = q.shape
+    key = (D, T)
+    if key not in _rope2_params_cache:
+        _rope2_params_cache[key] = mx.array([D, T], dtype=mx.uint32)
+    params = _rope2_params_cache[key]
+    size   = q.size
+    out = _rope2_kernel(
+        inputs=[q, k, cos, sin, params],
+        grid=(size, 1, 1),
+        threadgroup=(min(256, size), 1, 1),
+        output_shapes=[q.shape, k.shape],
+        output_dtypes=[q.dtype, k.dtype],
+    )
+    return out[0], out[1]
+
+
 # ── model ─────────────────────────────────────────────────────────────────────
 
 @dataclass
@@ -70,6 +141,8 @@ class Attention(nn.Module):
         self.n_head   = cfg.n_head
         self.head_dim = cfg.n_embd // cfg.n_head
         self.scale    = self.head_dim ** -0.5
+        self._rope_hd  = self.head_dim
+        self._rope_len = cfg.block_size
         self.qkv  = nn.Linear(cfg.n_embd, 3 * cfg.n_embd, bias=False)
         self.proj = nn.Linear(cfg.n_embd, cfg.n_embd, bias=False)
 
@@ -79,6 +152,10 @@ class Attention(nn.Module):
         q = q.reshape(B, T, self.n_head, self.head_dim).transpose(0, 2, 1, 3)
         k = k.reshape(B, T, self.n_head, self.head_dim).transpose(0, 2, 1, 3)
         v = v.reshape(B, T, self.n_head, self.head_dim).transpose(0, 2, 1, 3)
+
+        past_len = cache[0].shape[2] if cache is not None else 0
+        cos, sin = get_rope_slice(self._rope_hd, self._rope_len, past_len, T)
+        q, k = rope2(q, k, cos, sin)
 
         if cache is not None:
             past_k, past_v = cache
@@ -129,16 +206,13 @@ class GPT(nn.Module):
         super().__init__()
         self.cfg     = cfg
         self.tok_emb = nn.Embedding(cfg.vocab_size, cfg.n_embd)
-        self.pos_emb = nn.Embedding(cfg.block_size, cfg.n_embd)
         self.blocks  = [Block(cfg) for _ in range(cfg.n_layer)]
         self.norm    = RMSNorm(cfg.n_embd)
         self.head    = nn.Linear(cfg.n_embd, cfg.vocab_size, bias=False)
 
     def __call__(self, idx: mx.array, cache=None):
         B, T = idx.shape
-        past_len = cache[0][0].shape[2] if cache is not None else 0
-        positions = mx.arange(past_len, past_len + T)
-        x = self.tok_emb(idx) + self.pos_emb(positions)
+        x = self.tok_emb(idx)
         new_cache = []
         for i, block in enumerate(self.blocks):
             x, layer_cache = block(x, cache[i] if cache is not None else None)

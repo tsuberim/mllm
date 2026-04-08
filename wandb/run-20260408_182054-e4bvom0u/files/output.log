@@ -1,0 +1,61 @@
+  0%|          | 0/20000 [00:18<?, ?it/s, train=10.8153, val=10.7990]
+Traceback (most recent call last):
+  File "/Users/tsuberim/Projects/mllm/.venv/lib/python3.14/site-packages/huggingface_hub/utils/_http.py", line 761, in hf_raise_for_status
+    response.raise_for_status()
+    ~~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "/Users/tsuberim/Projects/mllm/.venv/lib/python3.14/site-packages/httpx/_models.py", line 829, in raise_for_status
+    raise HTTPStatusError(message, request=request, response=self)
+httpx.HTTPStatusError: Client error '404 Not Found' for url 'https://huggingface.co/api/models/tsuberim/mllm/preupload/main'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/Users/tsuberim/Projects/mllm/train.py", line 134, in <module>
+    save_checkpoint(step)
+    ~~~~~~~~~~~~~~~^^^^^^
+  File "/Users/tsuberim/Projects/mllm/train.py", line 76, in save_checkpoint
+    hf.upload_file(path_or_fileobj=buf, path_in_repo=CKPT_NAME,
+    ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                   repo_id=HF_REPO, repo_type="model")
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/tsuberim/Projects/mllm/.venv/lib/python3.14/site-packages/huggingface_hub/utils/_validators.py", line 88, in _inner_fn
+    return fn(*args, **kwargs)
+  File "/Users/tsuberim/Projects/mllm/.venv/lib/python3.14/site-packages/huggingface_hub/hf_api.py", line 1932, in _inner
+    return fn(self, *args, **kwargs)
+  File "/Users/tsuberim/Projects/mllm/.venv/lib/python3.14/site-packages/huggingface_hub/hf_api.py", line 5133, in upload_file
+    return self.create_commit(
+           ~~~~~~~~~~~~~~~~~~^
+        repo_id=repo_id,
+        ^^^^^^^^^^^^^^^^
+    ...<8 lines>...
+        parent_commit=parent_commit,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/Users/tsuberim/Projects/mllm/.venv/lib/python3.14/site-packages/huggingface_hub/utils/_validators.py", line 88, in _inner_fn
+    return fn(*args, **kwargs)
+  File "/Users/tsuberim/Projects/mllm/.venv/lib/python3.14/site-packages/huggingface_hub/hf_api.py", line 1932, in _inner
+    return fn(self, *args, **kwargs)
+  File "/Users/tsuberim/Projects/mllm/.venv/lib/python3.14/site-packages/huggingface_hub/hf_api.py", line 4688, in create_commit
+    self.preupload_lfs_files(
+    ~~~~~~~~~~~~~~~~~~~~~~~~^
+        repo_id=repo_id,
+        ^^^^^^^^^^^^^^^^
+    ...<6 lines>...
+        free_memory=False,  # do not remove `CommitOperationAdd.path_or_fileobj` on LFS files for "normal" users
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/Users/tsuberim/Projects/mllm/.venv/lib/python3.14/site-packages/huggingface_hub/hf_api.py", line 4915, in preupload_lfs_files
+    _fetch_upload_modes(
+    ~~~~~~~~~~~~~~~~~~~^
+        additions=additions_no_upload_mode,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<6 lines>...
+        gitignore_content=gitignore_content,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/Users/tsuberim/Projects/mllm/.venv/lib/python3.14/site-packages/huggingface_hub/utils/_validators.py", line 88, in _inner_fn
+    return fn(*args, **kwargs)

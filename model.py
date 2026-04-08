@@ -20,15 +20,36 @@ class Config:
 
     @classmethod
     def medium(cls):
-        """~21M params — local training experiments and cheap remote runs.
-        Fits in MPS memory during training (batch=16, block=512 → ~400MB total)."""
+        """~21M params — local training experiments and cheap remote runs."""
         return cls(n_embd=256, n_head=8, n_layer=8, block_size=512)
 
     @classmethod
     def base(cls):
-        """~117M params — production; comfortably fits on M4+ MPS at float16 (~250MB)."""
+        """~117M params — production target."""
         return cls(n_embd=768, n_head=12, n_layer=12, block_size=1024)
 
+
+# ── RoPE ──────────────────────────────────────────────────────────────────────
+
+def precompute_rope_freqs(head_dim: int, max_seq_len: int, theta: float = 10000.0):
+    freqs = 1.0 / (theta ** (torch.arange(0, head_dim, 2).float() / head_dim))
+    t     = torch.arange(max_seq_len)
+    freqs = torch.outer(t, freqs)          # [T, D/2]
+    emb   = torch.cat([freqs, freqs], -1)  # [T, D]  — rotate_half convention
+    return emb.cos(), emb.sin()
+
+def rotate_half(x):
+    d = x.shape[-1] // 2
+    return torch.cat([-x[..., d:], x[..., :d]], dim=-1)
+
+def apply_rope(q, k, cos, sin):
+    # q, k: [B, H, T, D]; cos/sin: [T, D] → broadcast as [1, 1, T, D]
+    cos = cos[None, None]
+    sin = sin[None, None]
+    return q * cos + rotate_half(q) * sin, k * cos + rotate_half(k) * sin
+
+
+# ── layers ────────────────────────────────────────────────────────────────────
 
 class RMSNorm(nn.Module):
     def __init__(self, dim, eps=1e-6):
@@ -47,6 +68,9 @@ class Attention(nn.Module):
         self.head_dim = cfg.n_embd // cfg.n_head
         self.qkv  = nn.Linear(cfg.n_embd, 3 * cfg.n_embd, bias=False)
         self.proj = nn.Linear(cfg.n_embd, cfg.n_embd, bias=False)
+        cos, sin = precompute_rope_freqs(self.head_dim, cfg.block_size)
+        self.register_buffer("rope_cos", cos)
+        self.register_buffer("rope_sin", sin)
 
     def forward(self, x):
         B, T, C = x.shape
@@ -54,6 +78,7 @@ class Attention(nn.Module):
         q = q.view(B, T, self.n_head, self.head_dim).transpose(1, 2)
         k = k.view(B, T, self.n_head, self.head_dim).transpose(1, 2)
         v = v.view(B, T, self.n_head, self.head_dim).transpose(1, 2)
+        q, k = apply_rope(q, k, self.rope_cos[:T], self.rope_sin[:T])
         y = F.scaled_dot_product_attention(q, k, v, is_causal=True)
         return self.proj(y.transpose(1, 2).contiguous().view(B, T, C))
 
@@ -90,7 +115,6 @@ class GPT(nn.Module):
         super().__init__()
         self.cfg     = cfg
         self.tok_emb = nn.Embedding(cfg.vocab_size, cfg.n_embd)
-        self.pos_emb = nn.Embedding(cfg.block_size, cfg.n_embd)
         self.blocks  = nn.ModuleList([Block(cfg) for _ in range(cfg.n_layer)])
         self.norm    = RMSNorm(cfg.n_embd)
         self.head    = nn.Linear(cfg.n_embd, cfg.vocab_size, bias=False)
@@ -106,7 +130,7 @@ class GPT(nn.Module):
 
     def forward(self, idx, targets=None):
         B, T = idx.shape
-        x = self.tok_emb(idx) + self.pos_emb(torch.arange(T, device=idx.device))
+        x = self.tok_emb(idx)
         for block in self.blocks:
             x = block(x)
         logits = self.head(self.norm(x))

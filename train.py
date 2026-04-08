@@ -4,6 +4,7 @@ import argparse
 from dotenv import load_dotenv
 load_dotenv()
 import torch
+import torch.nn.functional as F
 import numpy as np
 import tiktoken
 import wandb
@@ -21,7 +22,8 @@ parser.add_argument("--max_steps",  type=int,   required=True)
 parser.add_argument("--val_every",  type=int,   required=True)
 parser.add_argument("--val_steps",  type=int,   required=True)
 parser.add_argument("--save_every", type=int,   required=True)
-parser.add_argument("--lr",         type=float, default=3e-4)
+parser.add_argument("--lr",         type=float, default=3e-4,  help="AdamW lr (embeddings, norms)")
+parser.add_argument("--lr_muon",    type=float, default=0.02,  help="Muon lr (2-D weight matrices)")
 parser.add_argument("--grad_clip",  type=float, default=1.0)
 parser.add_argument("--wandb",      choices=["online", "disabled"], default="online")
 args = parser.parse_args()
@@ -73,13 +75,91 @@ def _val_prompts(n: int, prompt_tokens: int) -> list[str]:
 
 SAMPLE_PROMPTS = _val_prompts(N_SAMPLE_PROMPTS, PROMPT_TOKENS)
 
+# ── Muon optimizer ────────────────────────────────────────────────────────────
+
+def zeropower_via_newtonschulz5(G: torch.Tensor, steps: int = 5) -> torch.Tensor:
+    """
+    Orthogonalize G via Newton-Schulz iteration (5 steps, cubic convergence).
+    Returns a matrix with unit spectral norm.
+    Coefficients from the Muon paper ensure convergence to the polar factor.
+    """
+    assert G.ndim >= 2
+    a, b, c = 3.4445, -4.7750, 2.0315
+    # bfloat16 on CUDA for speed; float32 elsewhere (MPS, CPU)
+    dt = torch.bfloat16 if G.device.type == "cuda" else torch.float32
+    X  = G.to(dt) / (G.norm() + 1e-7)
+    if G.size(0) > G.size(1):
+        X = X.T
+    for _ in range(steps):
+        A = X @ X.T
+        B = b * A + c * (A @ A)
+        X = a * X + B @ X
+    if G.size(0) > G.size(1):
+        X = X.T
+    return X.to(G.dtype)
+
+
+class Muon(torch.optim.Optimizer):
+    """
+    Muon — MomentUm Orthogonalized by Newton-Schulz.
+
+    Applies orthogonalized gradient updates to 2-D weight matrices inside
+    transformer blocks (attention projections, MLP weights). 1-D params and
+    embeddings should use a separate AdamW optimizer.
+
+    Reference: https://github.com/KellerJordan/Muon
+    """
+    def __init__(self, params, lr: float = 0.02, momentum: float = 0.95,
+                 nesterov: bool = True, ns_steps: int = 5):
+        defaults = dict(lr=lr, momentum=momentum, nesterov=nesterov, ns_steps=ns_steps)
+        super().__init__(params, defaults)
+
+    @torch.no_grad()
+    def step(self):
+        for group in self.param_groups:
+            lr, momentum = group["lr"], group["momentum"]
+            nesterov, ns_steps = group["nesterov"], group["ns_steps"]
+            for p in group["params"]:
+                if p.grad is None:
+                    continue
+                g = p.grad
+                state = self.state[p]
+                if "buf" not in state:
+                    state["buf"] = torch.zeros_like(g)
+                buf = state["buf"]
+                buf.mul_(momentum).add_(g)
+                # Nesterov: use look-ahead gradient
+                update = g.add(buf, alpha=momentum) if nesterov else buf.clone()
+                if update.ndim == 2:
+                    # Orthogonalize via Newton-Schulz, then scale to match
+                    # the RMS of a standard SGD update at this LR.
+                    update = zeropower_via_newtonschulz5(update, steps=ns_steps)
+                    update *= max(1, update.size(0) / update.size(1)) ** 0.5
+                p.add_(update, alpha=-lr)
+
+
 # ── model ─────────────────────────────────────────────────────────────────────
 model = GPT(model_cfg).to(device)
 if device == "cuda":
     model = torch.compile(model)
 print(f"params: {model.num_params():,}")
 
-optim = torch.optim.AdamW(model.parameters(), lr=args.lr, betas=(0.9, 0.95), weight_decay=0.1)
+# Muon for 2-D weight matrices inside transformer blocks;
+# AdamW for embeddings, head, and 1-D norm weights.
+# tok_emb.weight and head.weight are tied — deduplicate by id().
+seen_ids: set = set()
+muon_params, adam_params = [], []
+for name, p in model.named_parameters():
+    if id(p) in seen_ids:
+        continue
+    seen_ids.add(id(p))
+    if p.ndim == 2 and "tok_emb" not in name:
+        muon_params.append(p)
+    else:
+        adam_params.append(p)
+
+optim_muon = Muon(muon_params, lr=args.lr_muon)
+optim_adam = torch.optim.AdamW(adam_params, lr=args.lr, betas=(0.9, 0.95), weight_decay=0.1)
 
 # ── sampling ──────────────────────────────────────────────────────────────────
 @torch.no_grad()
@@ -100,7 +180,12 @@ hf = HfApi() if args.wandb == "online" else None
 start_step = 0
 
 def save_checkpoint(step):
-    ckpt = {"step": step, "model": model.state_dict(), "optim": optim.state_dict()}
+    ckpt = {
+        "step":       step,
+        "model":      model.state_dict(),
+        "optim_muon": optim_muon.state_dict(),
+        "optim_adam": optim_adam.state_dict(),
+    }
     torch.save(ckpt, CKPT_NAME)
     if hf:
         buf = io.BytesIO()
@@ -114,17 +199,19 @@ def load_checkpoint():
     global start_step
     ckpt = None
     if Path(CKPT_NAME).exists():
-        ckpt = torch.load(CKPT_NAME, map_location=device)
+        ckpt = torch.load(CKPT_NAME, map_location=device, weights_only=False)
     elif hf:
         try:
             path = hf.hf_hub_download(repo_id=HF_REPO, filename=CKPT_NAME, repo_type="model")
-            ckpt = torch.load(path, map_location=device)
+            ckpt = torch.load(path, map_location=device, weights_only=False)
             print(f"resumed checkpoint from {HF_REPO}")
         except Exception:
             pass
     if ckpt:
         model.load_state_dict(ckpt["model"])
-        optim.load_state_dict(ckpt["optim"])
+        if "optim_muon" in ckpt:
+            optim_muon.load_state_dict(ckpt["optim_muon"])
+            optim_adam.load_state_dict(ckpt["optim_adam"])
         start_step = ckpt["step"] + 1
         print(f"resumed from step {start_step}")
 
@@ -133,7 +220,8 @@ load_checkpoint()
 # ── wandb ─────────────────────────────────────────────────────────────────────
 wandb.init(
     project="mllm", resume="allow", mode=args.wandb,
-    config={**model_cfg.__dict__, "batch_size": args.batch_size, "lr": args.lr,
+    config={**model_cfg.__dict__, "batch_size": args.batch_size,
+            "lr": args.lr, "lr_muon": args.lr_muon,
             "max_steps": args.max_steps, "device": device},
 )
 
@@ -146,10 +234,12 @@ for step in pbar:
     x, y = get_batch(train_tokens, args.batch_size, model_cfg.block_size)
     _, loss = model(x, y)
 
-    optim.zero_grad()
+    optim_muon.zero_grad()
+    optim_adam.zero_grad()
     loss.backward()
     grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip).item()
-    optim.step()
+    optim_muon.step()
+    optim_adam.step()
 
     log = {"train/loss": loss.item(), "train/grad_norm": grad_norm}
 

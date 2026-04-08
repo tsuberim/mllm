@@ -1,0 +1,41 @@
+{
+  "os": "macOS-26.3-arm64-arm-64bit-Mach-O",
+  "python": "CPython 3.14.2",
+  "startedAt": "2026-04-08T15:53:49.585455Z",
+  "args": [
+    "--model",
+    "medium"
+  ],
+  "program": "/Users/tsuberim/Projects/mllm/train.py",
+  "codePath": "train.py",
+  "codePathLocal": "train.py",
+  "git": {
+    "remote": "git@github.com:tsuberim/mllm.git",
+    "commit": "d1622900d15dabfdb96ad2ba93d28cf92ab11f24"
+  },
+  "email": "tsuberim@gmail.com",
+  "root": "/Users/tsuberim/Projects/mllm",
+  "host": "Matans-MacBook-Pro.local",
+  "executable": "/Users/tsuberim/Projects/mllm/.venv/bin/python",
+  "cpu_count": 12,
+  "cpu_count_logical": 12,
+  "disk": {
+    "/": {
+      "total": "494384795648",
+      "used": "491971641344"
+    }
+  },
+  "memory": {
+    "total": "25769803776"
+  },
+  "apple": {
+    "name": "Apple M4 Pro",
+    "ecpuCores": 4,
+    "pcpuCores": 8,
+    "gpuCores": 16,
+    "memoryGb": 24,
+    "swapTotalBytes": "2147483648",
+    "ramTotalBytes": "25769803776"
+  },
+  "writerId": "ptpz5qv7abrejsgp5srb1scpaea2b25d"
+}

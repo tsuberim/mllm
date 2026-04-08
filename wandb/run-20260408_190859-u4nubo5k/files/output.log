@@ -1,0 +1,3 @@
+ 50%|█████     | 1000/2000 [01:01<04:50,  3.45step/s, gnorm=0.97, loss=3.2746, val=3.1995]Uploading files as a binary IO buffer is not supported by Xet Storage. Falling back to HTTP upload.
+  checkpoint pushed to tsuberim/mllm
+ 60%|██████    | 1200/2000 [02:44<03:51,  3.46step/s, gnorm=0.99, loss=3.0173, val=3.0707]  

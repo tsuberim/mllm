@@ -25,6 +25,12 @@ PyTorch checkpoint → MLX `.npz`. Weight tying is made explicit (head.weight sa
 
 PyTorch MPS (Apple GPU backend) has silent CPU fallbacks, no `torch.compile`, no int4 quantization, no FlashAttention. Training on MPS is explicitly out of scope. MLX is purpose-built for Apple Silicon inference and gives clean access to Metal kernels.
 
-## Muon optimizer (planned)
+## Muon optimizer
 
-Newton-Schulz orthogonalised momentum for 2D weight matrices in transformer blocks. Reference implementation is a ~40-line snippet (no stable PyPI package). Deferred until training baseline is established.
+Newton-Schulz orthogonalised momentum for 2D weight matrices in transformer blocks.
+Implemented directly (~50 lines, no external package needed).
+
+- **Muon** (`lr=0.02`): all `Linear.weight` inside transformer blocks (qkv, proj, w1/w2/w3).
+- **AdamW** (`lr=3e-4`): 1D params (RMSNorm weights) and embeddings/head.
+
+Split is forced by the algorithm: Newton-Schulz orthogonalization only makes sense for 2D matrices.
