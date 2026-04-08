@@ -22,6 +22,16 @@ python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
+## Docs
+
+Keep `docs/` up-to-date whenever anything changes:
+- `docs/architecture.md` — model design and config table
+- `docs/stack.md` — training/inference split rationale, planned work
+- `docs/training.md` — hyperparams, data, observability
+- `docs/inference.md` — benchmarks, kernels, quantization
+
+Update benchmarks whenever a new optimisation is measured. Update planned-work sections when something ships.
+
 ## Non-goals
 
 - Training on MPS
