@@ -5,6 +5,7 @@ from dotenv import load_dotenv
 load_dotenv()
 import torch
 import numpy as np
+import tiktoken
 import wandb
 from pathlib import Path
 from tqdm import tqdm
@@ -29,6 +30,13 @@ model_cfg = {"tiny": Config.tiny, "medium": Config.medium, "base": Config.base}[
 CKPT_NAME = f"ckpt_{args.model}.pt"
 HF_REPO   = os.environ["HF_REPO"]
 
+SAMPLE_PROMPTS = [
+    "Once upon a time",
+    "There was a little girl named",
+    "The dog wanted to",
+    "One day, a boy found a",
+]
+
 # ── device ────────────────────────────────────────────────────────────────────
 if torch.cuda.is_available():
     device = "cuda"
@@ -40,6 +48,7 @@ print(f"device: {device}")
 
 # ── data ──────────────────────────────────────────────────────────────────────
 assert Path("data_train.bin").exists(), "run data.py first"
+enc = tiktoken.get_encoding("gpt2")
 
 def load_tokens(path):
     return np.memmap(path, dtype=np.uint16, mode="r")
@@ -60,6 +69,20 @@ if device == "cuda":
 print(f"params: {model.num_params():,}")
 
 optim = torch.optim.AdamW(model.parameters(), lr=args.lr, betas=(0.9, 0.95), weight_decay=0.1)
+
+# ── sampling ──────────────────────────────────────────────────────────────────
+@torch.no_grad()
+def generate(prompt: str, max_new: int = 100, temperature: float = 0.8) -> str:
+    model.eval()
+    tokens = enc.encode(prompt)
+    idx = torch.tensor([tokens], device=device)
+    for _ in range(max_new):
+        idx_cond = idx[:, -model_cfg.block_size:]
+        logits, _ = model(idx_cond)
+        next_tok = torch.multinomial(
+            torch.softmax(logits[:, -1, :] / temperature, dim=-1), 1)
+        idx = torch.cat([idx, next_tok], dim=1)
+    return enc.decode(idx[0].tolist())
 
 # ── checkpoint ────────────────────────────────────────────────────────────────
 hf = HfApi() if args.wandb == "online" else None
@@ -104,7 +127,8 @@ wandb.init(
 )
 
 # ── training loop ─────────────────────────────────────────────────────────────
-pbar = tqdm(range(start_step, args.max_steps), initial=start_step, total=args.max_steps)
+pbar = tqdm(range(start_step, args.max_steps), initial=start_step,
+            total=args.max_steps, unit="step")
 
 for step in pbar:
     model.train()
@@ -113,10 +137,10 @@ for step in pbar:
 
     optim.zero_grad()
     loss.backward()
-    torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
+    grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip).item()
     optim.step()
 
-    log = {"train/loss": loss.item()}
+    log = {"train/loss": loss.item(), "train/grad_norm": grad_norm}
 
     if step % args.val_every == 0:
         model.eval()
@@ -125,10 +149,17 @@ for step in pbar:
                 model(*get_batch(val_tokens, args.batch_size, model_cfg.block_size))[1].item()
                 for _ in range(args.val_steps)
             ) / args.val_steps
+
+        samples = wandb.Table(columns=["prompt", "sample"])
+        for prompt in SAMPLE_PROMPTS:
+            samples.add_data(prompt, generate(prompt))
+
         log["val/loss"] = val_loss
-        pbar.set_postfix(train=f"{loss.item():.4f}", val=f"{val_loss:.4f}")
+        log["samples"]  = samples
+        pbar.set_postfix(loss=f"{loss.item():.4f}", val=f"{val_loss:.4f}",
+                         gnorm=f"{grad_norm:.2f}")
     else:
-        pbar.set_postfix(train=f"{loss.item():.4f}")
+        pbar.set_postfix(loss=f"{loss.item():.4f}", gnorm=f"{grad_norm:.2f}")
 
     if step % args.save_every == 0:
         save_checkpoint(step)
