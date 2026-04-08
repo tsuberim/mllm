@@ -177,7 +177,7 @@ def load_model(weights_path: str, cfg: Config, bits: int = 0) -> GPT:
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model",    choices=["tiny", "base"], default="base")
+    parser.add_argument("--model",    choices=["tiny", "medium", "base"], default="base")
     parser.add_argument("--weights",  default="weights.npz")
     parser.add_argument("--prompt",   default="Once upon a time")
     parser.add_argument("--max_new",  type=int,   default=200)
@@ -189,7 +189,7 @@ if __name__ == "__main__":
     max_new_tokens = args.max_new
     temperature    = args.temp
 
-    cfg = Config.tiny() if args.model == "tiny" else Config.base()
+    cfg = {"tiny": Config.tiny, "medium": Config.medium, "base": Config.base}[args.model]()
     enc = tiktoken.get_encoding("gpt2")
 
     print(f"loading {weights_path}...")

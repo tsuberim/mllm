@@ -32,7 +32,7 @@ HF_REPO   = os.environ["HF_REPO"]
 
 N_SAMPLE_PROMPTS = 4
 PROMPT_TOKENS    = 20   # tokens fed as context
-SAMPLE_NEW       = 20   # tokens to generate
+SAMPLE_NEW       = 40   # tokens to generate
 
 # ── device ────────────────────────────────────────────────────────────────────
 if torch.cuda.is_available():
