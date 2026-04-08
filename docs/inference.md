@@ -20,9 +20,9 @@ python bench.py --bits 4        # int4 quantized
 |-------|-----|----------|
 | fp32, no KV cache | 38.7 | 1536 MB |
 | fp32 + KV cache | 242.6 | 802 MB |
-| int4 + KV cache | ~700 | 191 MB |
+| int4 + KV cache | ~730 | 191 MB |
 
-Note: figures are 3-run averages (`python bench.py --bits 4`); ±10 TPS run-to-run variation on M4.
+Note: figures are 3-run averages (`python bench.py --bits 4`); ±3 TPS run-to-run variation on M4.
 
 ## KV cache
 
@@ -63,7 +63,7 @@ Parity tested against PyTorch CPU at `atol=1e-6` (max observed diff ~5e-7, from 
 ### Planned
 
 - ~~Pre-allocated KV cache~~ — done, +22% TPS.
-- `mx.compile()` on inference loop: 10–30% expected gain with zero model changes.
+- ~~`mx.compile()` on MLP per block~~ — done, +5% TPS, 18× lower variance. Full-model compilation blocked by Python-offset KVCache (changing slice indices retrace graph each step); MLP is the compilable sweet spot.
 - GQA (n_kv_heads=4): 3× smaller KV cache, 20–40% decode TPS gain; requires retraining.
 - Dedicated decode GEMV kernel: explicit SIMD-group reduction over KV sequence; 10–20% end-to-end after GQA shrinks KV size.
 - Custom int4 GEMV: naive simdgroup-reduction kernel benchmarked at parity with MLX's built-in (~490 TPS both ways). MLX's `quantized_matmul` is already close to bandwidth-optimal. Deferred.
