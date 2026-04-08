@@ -1,0 +1,9 @@
+datasets
+huggingface_hub
+tiktoken
+torch
+wandb
+tqdm
+python-dotenv
+mlx
+pytest

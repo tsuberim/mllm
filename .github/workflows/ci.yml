@@ -1,0 +1,25 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    # macos-latest is Apple M1 — Metal may or may not be available under
+    # GitHub's virtualisation layer. If MLX fails to init Metal, the job will
+    # error and we'll know to switch to a self-hosted runner.
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run parity tests
+        run: pytest test_e2e.py -v
