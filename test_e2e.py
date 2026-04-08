@@ -127,15 +127,16 @@ def test_kv_cache_parity():
         logits_full_np = np.array(logits_full)  # [1, seq_len, vocab]
 
         # ── cached: prefill prompt, then decode one token at a time ────────
+        cache = mlx_model.make_cache()
         prompt = mx.array(tokens_np[:, :prompt_len])
-        logits_prefill, cache = mlx_model(prompt)
-        mx.eval(logits_prefill, *[t for k, v in cache for t in (k, v)])
+        logits_prefill, cache = mlx_model(prompt, cache)
+        mx.eval(logits_prefill, *[c.k for c in cache], *[c.v for c in cache])
 
         cached_logits = [np.array(logits_prefill)]
         for i in range(decode_steps):
             tok = mx.array(tokens_np[:, prompt_len + i : prompt_len + i + 1])
             logits_step, cache = mlx_model(tok, cache)
-            mx.eval(logits_step, *[t for k, v in cache for t in (k, v)])
+            mx.eval(logits_step, *[c.k for c in cache], *[c.v for c in cache])
             cached_logits.append(np.array(logits_step))
 
         logits_cached_np = np.concatenate(cached_logits, axis=1)  # [1, seq_len, vocab]
@@ -173,8 +174,9 @@ def test_rope_offset():
 
         # decode at position 4 (after a 4-token prefill)
         prefix = mx.array(torch.randint(0, cfg.vocab_size, (1, 4)).numpy())
-        _, cache = mlx_model(prefix)
-        mx.eval(*[t for k, v in cache for t in (k, v)])
+        cache = mlx_model.make_cache()
+        _, cache = mlx_model(prefix, cache)
+        mx.eval(*[c.k for c in cache], *[c.v for c in cache])
         logits_pos4, _ = mlx_model(tok, cache)
         mx.eval(logits_pos4)
 

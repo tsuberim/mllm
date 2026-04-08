@@ -20,9 +20,9 @@ python bench.py --bits 4        # int4 quantized
 |-------|-----|----------|
 | fp32, no KV cache | 38.7 | 1536 MB |
 | fp32 + KV cache | 242.6 | 802 MB |
-| int4 + KV cache | ~630 | 188 MB |
+| int4 + KV cache | ~700 | 191 MB |
 
-Note: int4 TPS varies ~10% run-to-run due to system scheduling; 630 is a representative figure.
+Note: figures are 3-run averages (`python bench.py --bits 4`); ±10 TPS run-to-run variation on M4.
 
 ## KV cache
 
@@ -33,6 +33,10 @@ Positional embeddings use the correct offset derived from cache size.
 ## Attention
 
 `mx.fast.scaled_dot_product_attention(q, k, v, scale=s, mask="causal")` replaces the manual `q @ k^T → softmax → @ v` path. MLX selects `sdpa_vector` for decode (T=1, head_dim=64) — online softmax, no intermediate `[B,H,T,T]` score matrix. ~8–11% TPS gain vs manual attention.
+
+## KV cache
+
+Pre-allocated `[1, H, max_T, D]` buffer per layer, updated via slice assignment each decode step. Eliminates the per-step `mx.concatenate` that previously allocated a new tensor and copied the full cache every token. +22% TPS vs growing-concatenate at n_tokens=500; gain scales with context length (2× at 1500 tokens). Memory footprint is now fixed at model load time rather than growing during generation.
 
 ## Positional encoding: RoPE
 
@@ -58,7 +62,7 @@ Parity tested against PyTorch CPU at `atol=1e-6` (max observed diff ~5e-7, from 
 
 ### Planned
 
-- Pre-allocated KV cache: eliminate per-step `mx.concatenate` (copies ~18.9 MB/token at T=512; ~10% of M4 BW budget). Pre-allocate `[1, H, max_T, D]`, use slice assignment per step.
+- ~~Pre-allocated KV cache~~ — done, +22% TPS.
 - `mx.compile()` on inference loop: 10–30% expected gain with zero model changes.
 - GQA (n_kv_heads=4): 3× smaller KV cache, 20–40% decode TPS gain; requires retraining.
 - Dedicated decode GEMV kernel: explicit SIMD-group reduction over KV sequence; 10–20% end-to-end after GQA shrinks KV size.

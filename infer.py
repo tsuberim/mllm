@@ -105,6 +105,34 @@ def rope2(q: mx.array, k: mx.array, cos: mx.array, sin: mx.array):
     return out[0], out[1]
 
 
+# ── KV cache ──────────────────────────────────────────────────────────────────
+
+class KVCache:
+    """Pre-allocated KV cache for one attention layer.
+
+    Pre-allocating [1, H, max_T, D] and writing new tokens via slice assignment
+    avoids the per-step mx.concatenate that would otherwise allocate a new tensor
+    and copy the full cache every token (~18.9 MB/token at T=512 for the base model).
+    After mx.eval(), MLX can reuse the existing buffer for subsequent scatter ops.
+    """
+    def __init__(self, n_head: int, head_dim: int, max_T: int):
+        self.offset = 0
+        self.k = mx.zeros((1, n_head, max_T, head_dim))
+        self.v = mx.zeros((1, n_head, max_T, head_dim))
+        mx.eval(self.k, self.v)
+
+    def update(self, k: mx.array, v: mx.array) -> tuple[mx.array, mx.array]:
+        T = k.shape[2]
+        if self.offset + T > self.k.shape[2]:
+            raise ValueError(
+                f"KV cache overflow: offset {self.offset} + T {T} > max_T {self.k.shape[2]}"
+            )
+        self.k[:, :, self.offset : self.offset + T, :] = k
+        self.v[:, :, self.offset : self.offset + T, :] = v
+        self.offset += T
+        return self.k[:, :, : self.offset, :], self.v[:, :, : self.offset, :]
+
+
 # ── model ─────────────────────────────────────────────────────────────────────
 
 @dataclass
@@ -145,26 +173,24 @@ class Attention(nn.Module):
         self.qkv  = nn.Linear(cfg.n_embd, 3 * cfg.n_embd, bias=False)
         self.proj = nn.Linear(cfg.n_embd, cfg.n_embd, bias=False)
 
-    def __call__(self, x: mx.array, cache=None):
+    def __call__(self, x: mx.array, cache: KVCache | None = None):
         B, T, C = x.shape
         q, k, v = mx.split(self.qkv(x), 3, axis=-1)
         q = q.reshape(B, T, self.n_head, self.head_dim).transpose(0, 2, 1, 3)
         k = k.reshape(B, T, self.n_head, self.head_dim).transpose(0, 2, 1, 3)
         v = v.reshape(B, T, self.n_head, self.head_dim).transpose(0, 2, 1, 3)
 
-        past_len = cache[0].shape[2] if cache is not None else 0
+        past_len = cache.offset if cache is not None else 0
         cos, sin = get_rope_slice(self.head_dim, self._rope_len, past_len, T)
         q, k = rope2(q, k, cos, sin)
 
         if cache is not None:
-            past_k, past_v = cache
-            k = mx.concatenate([past_k, k], axis=2)
-            v = mx.concatenate([past_v, v], axis=2)
+            k, v = cache.update(k, v)
 
         y = mx.fast.scaled_dot_product_attention(
             q, k, v, scale=self.scale, mask="causal"
         ).transpose(0, 2, 1, 3).reshape(B, T, C)
-        return self.proj(y), (k, v)
+        return self.proj(y)
 
 
 class MLP(nn.Module):
@@ -187,11 +213,10 @@ class Block(nn.Module):
         self.norm2 = RMSNorm(cfg.n_embd)
         self.mlp   = MLP(cfg)
 
-    def __call__(self, x: mx.array, cache=None):
-        attn_out, new_cache = self.attn(self.norm1(x), cache)
-        x = x + attn_out
+    def __call__(self, x: mx.array, cache: KVCache | None = None):
+        x = x + self.attn(self.norm1(x), cache)
         x = x + self.mlp(self.norm2(x))
-        return x, new_cache
+        return x
 
 
 class GPT(nn.Module):
@@ -203,28 +228,31 @@ class GPT(nn.Module):
         self.norm    = RMSNorm(cfg.n_embd)
         self.head    = nn.Linear(cfg.n_embd, cfg.vocab_size, bias=False)
 
-    def __call__(self, idx: mx.array, cache=None):
-        B, T = idx.shape
+    def make_cache(self) -> list[KVCache]:
+        return [KVCache(b.attn.n_head, b.attn.head_dim, self.cfg.block_size)
+                for b in self.blocks]
+
+    def __call__(self, idx: mx.array, cache: list[KVCache] | None = None):
         x = self.tok_emb(idx)
-        new_cache = []
         for i, block in enumerate(self.blocks):
-            x, layer_cache = block(x, cache[i] if cache is not None else None)
-            new_cache.append(layer_cache)
-        return self.head(self.norm(x)), new_cache
+            x = block(x, cache[i] if cache is not None else None)
+        return self.head(self.norm(x)), cache
 
     def generate(self, idx: mx.array, max_new_tokens: int, temperature: float = 1.0) -> mx.array:
+        cache = self.make_cache()
+
         # prefill: process full prompt, build KV cache
-        logits, cache = self(idx)
+        logits, cache = self(idx, cache)
         next_tok = mx.argmax(logits[:, -1, :] / temperature, axis=-1, keepdims=True)
         result = mx.concatenate([idx, next_tok], axis=1)
-        mx.eval(result, *[t for k, v in cache for t in (k, v)])
+        mx.eval(result, *[c.k for c in cache], *[c.v for c in cache])
 
         # decode: one new token per step, O(1) attention via cache
         for _ in range(max_new_tokens - 1):
             logits, cache = self(next_tok, cache)
             next_tok = mx.argmax(logits[:, -1, :] / temperature, axis=-1, keepdims=True)
             result = mx.concatenate([result, next_tok], axis=1)
-            mx.eval(result, *[t for k, v in cache for t in (k, v)])
+            mx.eval(result, *[c.k for c in cache], *[c.v for c in cache])
 
         return result
 
