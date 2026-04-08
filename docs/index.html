@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>mllm — Efficient LM for Apple Silicon</title>
+  <style>
+    :root {
+      --bg: #0d1117;
+      --surface: #161b22;
+      --border: #30363d;
+      --text: #e6edf3;
+      --muted: #8b949e;
+      --accent: #58a6ff;
+      --green: #3fb950;
+      --orange: #d29922;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+      line-height: 1.6;
+      padding: 0 1rem;
+    }
+
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    header {
+      max-width: 800px;
+      margin: 0 auto;
+      padding: 4rem 0 2rem;
+      border-bottom: 1px solid var(--border);
+    }
+
+    header h1 {
+      font-size: 2.5rem;
+      font-weight: 700;
+      letter-spacing: -0.5px;
+    }
+
+    header h1 span { color: var(--accent); }
+
+    header p {
+      margin-top: 0.75rem;
+      color: var(--muted);
+      font-size: 1.1rem;
+      max-width: 560px;
+    }
+
+    .badges {
+      display: flex;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+      margin-top: 1.25rem;
+    }
+
+    .badge {
+      display: inline-block;
+      padding: 0.2rem 0.65rem;
+      border-radius: 9999px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      border: 1px solid var(--border);
+      color: var(--muted);
+    }
+
+    .badge.green { border-color: var(--green); color: var(--green); }
+    .badge.blue  { border-color: var(--accent); color: var(--accent); }
+
+    .cta {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      margin-top: 1.5rem;
+      padding: 0.55rem 1.1rem;
+      background: var(--accent);
+      color: #0d1117;
+      font-weight: 600;
+      border-radius: 6px;
+      font-size: 0.9rem;
+    }
+    .cta:hover { background: #79c0ff; text-decoration: none; }
+
+    main {
+      max-width: 800px;
+      margin: 0 auto;
+      padding: 3rem 0 5rem;
+    }
+
+    section { margin-bottom: 3rem; }
+
+    h2 {
+      font-size: 1.25rem;
+      font-weight: 600;
+      margin-bottom: 1rem;
+      padding-bottom: 0.4rem;
+      border-bottom: 1px solid var(--border);
+      color: var(--text);
+    }
+
+    p { color: var(--muted); margin-bottom: 0.75rem; }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.9rem;
+    }
+
+    th {
+      text-align: left;
+      padding: 0.5rem 0.75rem;
+      color: var(--muted);
+      font-weight: 600;
+      border-bottom: 1px solid var(--border);
+      font-size: 0.8rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    td {
+      padding: 0.55rem 0.75rem;
+      border-bottom: 1px solid var(--border);
+      color: var(--text);
+    }
+
+    tr:last-child td { border-bottom: none; }
+
+    .highlight td { color: var(--green); font-weight: 600; }
+
+    .card-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+      gap: 1rem;
+    }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1rem 1.1rem;
+    }
+
+    .card .label {
+      font-size: 0.75rem;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 0.3rem;
+    }
+
+    .card .value {
+      font-size: 1.4rem;
+      font-weight: 700;
+      color: var(--green);
+    }
+
+    .card .sub {
+      font-size: 0.8rem;
+      color: var(--muted);
+      margin-top: 0.2rem;
+    }
+
+    .chip-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+    }
+
+    .chip {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 0.3rem 0.7rem;
+      font-size: 0.85rem;
+      color: var(--text);
+    }
+
+    footer {
+      max-width: 800px;
+      margin: 0 auto;
+      padding: 2rem 0;
+      border-top: 1px solid var(--border);
+      font-size: 0.85rem;
+      color: var(--muted);
+      display: flex;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1><span>mllm</span></h1>
+  <p>A small language model built from scratch for local inference on Apple Silicon — MacBook Pro and iPhone.</p>
+  <div class="badges">
+    <span class="badge blue">PyTorch + MLX</span>
+    <span class="badge blue">Apple Silicon</span>
+    <span class="badge green">MIT License</span>
+    <span class="badge">117M params</span>
+    <span class="badge">TinyStories</span>
+  </div>
+  <a class="cta" href="https://github.com/tsuberim/mllm">
+    View on GitHub →
+  </a>
+</header>
+
+<main>
+
+  <section>
+    <h2>Benchmarks — Base Model (M4 MacBook Pro)</h2>
+    <p>Base model, ~117M parameters. Quantization and KV cache measured end-to-end including prefill.</p>
+    <table>
+      <thead>
+        <tr>
+          <th>Setup</th>
+          <th>Tokens / sec</th>
+          <th>Peak Memory</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>fp32, no KV cache</td>
+          <td>38.7</td>
+          <td>1536 MB</td>
+        </tr>
+        <tr>
+          <td>fp32 + KV cache</td>
+          <td>242.6</td>
+          <td>802 MB</td>
+        </tr>
+        <tr class="highlight">
+          <td>int4 + KV cache</td>
+          <td>625.3</td>
+          <td>188 MB</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>Headline Numbers</h2>
+    <div class="card-grid">
+      <div class="card">
+        <div class="label">Peak TPS</div>
+        <div class="value">625</div>
+        <div class="sub">int4 + KV cache on M4</div>
+      </div>
+      <div class="card">
+        <div class="label">Memory (int4)</div>
+        <div class="value">188 MB</div>
+        <div class="sub">fits on iPhone (≤4 GB)</div>
+      </div>
+      <div class="card">
+        <div class="label">Parameters</div>
+        <div class="value">117M</div>
+        <div class="sub">base config</div>
+      </div>
+      <div class="card">
+        <div class="label">Training tokens</div>
+        <div class="value">474M</div>
+        <div class="sub">TinyStories dataset</div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Architecture</h2>
+    <p>GPT-style decoder-only transformer. Three configs from sanity-check to production.</p>
+    <table>
+      <thead>
+        <tr>
+          <th>Config</th>
+          <th>Params</th>
+          <th>n_embd</th>
+          <th>n_head</th>
+          <th>n_layer</th>
+          <th>block_size</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td>tiny</td><td>~1.6M</td><td>32</td><td>2</td><td>2</td><td>64</td></tr>
+        <tr><td>medium</td><td>~21M</td><td>256</td><td>8</td><td>8</td><td>512</td></tr>
+        <tr><td>base</td><td>~117M</td><td>768</td><td>12</td><td>12</td><td>1024</td></tr>
+      </tbody>
+    </table>
+    <p style="margin-top:1rem">Key choices: RMSNorm, SwiGLU MLP, weight tying, pre-norm, no bias on linear layers.</p>
+  </section>
+
+  <section>
+    <h2>Stack</h2>
+    <div class="chip-list">
+      <span class="chip">PyTorch (training, CUDA)</span>
+      <span class="chip">MLX (inference, Metal)</span>
+      <span class="chip">Triton (planned kernels)</span>
+      <span class="chip">CoreML (iPhone, planned)</span>
+      <span class="chip">tiktoken GPT-2</span>
+      <span class="chip">TinyStories</span>
+      <span class="chip">W&amp;B</span>
+      <span class="chip">HuggingFace Hub</span>
+    </div>
+    <p style="margin-top:1rem">PyTorch is the source of truth. MLX is inference-only with custom Metal kernels. Weight conversion is explicit and parity-tested at atol=1e-6.</p>
+  </section>
+
+  <section>
+    <h2>What's Next</h2>
+    <div class="chip-list">
+      <span class="chip">Muon optimizer</span>
+      <span class="chip">Tiled int4 matmul kernel</span>
+      <span class="chip">Separate prefill / decode kernels</span>
+      <span class="chip">RoPE</span>
+      <span class="chip">CoreML export (iPhone)</span>
+    </div>
+  </section>
+
+</main>
+
+<footer>
+  <span>MIT License · <a href="https://github.com/tsuberim/mllm">github.com/tsuberim/mllm</a></span>
+  <span>Built by Matan Tsuberi</span>
+</footer>
+
+</body>
+</html>
