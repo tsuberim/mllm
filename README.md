@@ -1,4 +1,4 @@
-# mllm
+# Merlin
 
 An efficient small language model built from scratch for local inference on Apple Silicon — MacBook Pro and iPhone.
 
