@@ -79,7 +79,7 @@ def test_e2e_parity():
         # ── MLX forward ───────────────────────────────────────────────────────
         infer_cfg = InferConfig.tiny()
         mlx_model = load_model(weights_path, infer_cfg)
-        logits_mx = mlx_model(mx.array(tokens_np))
+        logits_mx, _ = mlx_model(mx.array(tokens_np))
         mx.eval(logits_mx)
         logits_mx = np.array(logits_mx)        # [1, T, vocab]
 

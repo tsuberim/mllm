@@ -70,19 +70,28 @@ class Attention(nn.Module):
         self.qkv  = nn.Linear(cfg.n_embd, 3 * cfg.n_embd, bias=False)
         self.proj = nn.Linear(cfg.n_embd, cfg.n_embd, bias=False)
 
-    def __call__(self, x: mx.array) -> mx.array:
+    def __call__(self, x: mx.array, cache=None):
         B, T, C = x.shape
         q, k, v = mx.split(self.qkv(x), 3, axis=-1)
         q = q.reshape(B, T, self.n_head, self.head_dim).transpose(0, 2, 1, 3)
         k = k.reshape(B, T, self.n_head, self.head_dim).transpose(0, 2, 1, 3)
         v = v.reshape(B, T, self.n_head, self.head_dim).transpose(0, 2, 1, 3)
 
-        # causal mask
-        scores = (q @ k.swapaxes(-2, -1)) * self.scale
-        mask = mx.tril(mx.ones((T, T), dtype=mx.bool_))
-        scores = mx.where(mask, scores, mx.full(scores.shape, float("-inf")))
+        if cache is not None:
+            past_k, past_v = cache
+            k = mx.concatenate([past_k, k], axis=2)
+            v = mx.concatenate([past_v, v], axis=2)
+
+        scores = (q @ k.swapaxes(-2, -1)) * self.scale  # [B, H, T, S]
+
+        # causal mask only needed during prefill (T > 1);
+        # during decode T == 1 and the single query attends to all past freely
+        if T > 1:
+            mask = mx.tril(mx.ones((T, T), dtype=mx.bool_))
+            scores = mx.where(mask, scores, mx.full(scores.shape, float("-inf")))
+
         y = (mx.softmax(scores, axis=-1) @ v).transpose(0, 2, 1, 3).reshape(B, T, C)
-        return self.proj(y)
+        return self.proj(y), (k, v)
 
 
 class MLP(nn.Module):
@@ -105,10 +114,11 @@ class Block(nn.Module):
         self.norm2 = RMSNorm(cfg.n_embd)
         self.mlp   = MLP(cfg)
 
-    def __call__(self, x: mx.array) -> mx.array:
-        x = x + self.attn(self.norm1(x))
+    def __call__(self, x: mx.array, cache=None):
+        attn_out, new_cache = self.attn(self.norm1(x), cache)
+        x = x + attn_out
         x = x + self.mlp(self.norm2(x))
-        return x
+        return x, new_cache
 
 
 class GPT(nn.Module):
@@ -121,27 +131,40 @@ class GPT(nn.Module):
         self.norm    = RMSNorm(cfg.n_embd)
         self.head    = nn.Linear(cfg.n_embd, cfg.vocab_size, bias=False)
 
-    def __call__(self, idx: mx.array) -> mx.array:
+    def __call__(self, idx: mx.array, cache=None):
         B, T = idx.shape
-        x = self.tok_emb(idx) + self.pos_emb(mx.arange(T))
-        for block in self.blocks:
-            x = block(x)
-        return self.head(self.norm(x))
+        past_len = cache[0][0].shape[2] if cache is not None else 0
+        positions = mx.arange(past_len, past_len + T)
+        x = self.tok_emb(idx) + self.pos_emb(positions)
+        new_cache = []
+        for i, block in enumerate(self.blocks):
+            x, layer_cache = block(x, cache[i] if cache is not None else None)
+            new_cache.append(layer_cache)
+        return self.head(self.norm(x)), new_cache
 
     def generate(self, idx: mx.array, max_new_tokens: int, temperature: float = 1.0) -> mx.array:
-        for _ in range(max_new_tokens):
-            idx_cond = idx[:, -self.cfg.block_size:]
-            logits = self(idx_cond)[:, -1, :] / temperature
-            next_tok = mx.argmax(logits, axis=-1, keepdims=True)
-            idx = mx.concatenate([idx, next_tok], axis=1)
-            mx.eval(idx)
-        return idx
+        # prefill: process full prompt, build KV cache
+        logits, cache = self(idx)
+        next_tok = mx.argmax(logits[:, -1, :] / temperature, axis=-1, keepdims=True)
+        result = mx.concatenate([idx, next_tok], axis=1)
+        mx.eval(result, *[t for k, v in cache for t in (k, v)])
+
+        # decode: one new token per step, O(1) attention via cache
+        for _ in range(max_new_tokens - 1):
+            logits, cache = self(next_tok, cache)
+            next_tok = mx.argmax(logits[:, -1, :] / temperature, axis=-1, keepdims=True)
+            result = mx.concatenate([result, next_tok], axis=1)
+            mx.eval(result, *[t for k, v in cache for t in (k, v)])
+
+        return result
 
 
-def load_model(weights_path: str, cfg: Config) -> GPT:
+def load_model(weights_path: str, cfg: Config, bits: int = 0) -> GPT:
     model = GPT(cfg)
     weights = list(mx.load(weights_path).items())
     model.load_weights(weights)
+    if bits in (4, 8):
+        nn.quantize(model, group_size=64, bits=bits)
     mx.eval(model.parameters())
     return model
 
