@@ -7,13 +7,15 @@
 - AdamW optimizer (Muon planned — see below)
 - Checkpoints saved to local disk + HuggingFace Hub
 
-## Inference: MLX (Apple Silicon / Metal)
+## Inference: MLX (Mac) + CoreML (iPhone, planned)
 
 - Apple's ML framework, native Metal kernels, lazy evaluation, unified memory
 - Custom Metal kernel: fused SwiGLU (one pass instead of two)
 - `mx.fast.rms_norm`, `mx.fast.scaled_dot_product_attention` for other hot paths
 - int4 block-wise quantization via `mlx.nn.quantize` (dequant-on-the-fly)
 - KV cache: prefill once, O(1) decode per token
+- iPhone target: model must fit within ~4 GB; int4 base model is 188 MB — well within budget
+- CoreML export path: convert MLX weights → CoreML via `coremltools`; enables on-device iOS deployment
 
 ## Bridge: convert.py
 

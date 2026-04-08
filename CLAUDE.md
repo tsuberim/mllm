@@ -1,18 +1,19 @@
 # mllm
 
-Build the most efficient small language model that runs locally on a MacBook Pro.
+Build the most efficient small language model that runs locally on Apple Silicon — MacBook Pro and iPhone.
 Educational, but aimed at being genuinely useful and open source.
 
 ## Goals
 
-- Maximize inference TPS and minimize memory footprint on Apple Silicon
+- Maximize inference TPS and minimize memory footprint on Apple Silicon (Mac and iPhone)
 - Train from scratch
 - Custom kernels from the start — no relying on framework defaults
+- iPhone target: model must fit within ~4 GB RAM; CoreML export path planned
 
 ## Stack
 
 - **Training**: PyTorch + CUDA + Triton (NVIDIA)
-- **Inference**: MLX (Apple Silicon / Metal)
+- **Inference**: MLX (Apple Silicon / Metal) — Mac; CoreML (planned) — iPhone
 - **Bridge**: weight conversion + parity tests; PyTorch is source of truth
 
 ## Setup
