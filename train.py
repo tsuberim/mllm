@@ -30,12 +30,9 @@ model_cfg = {"tiny": Config.tiny, "medium": Config.medium, "base": Config.base}[
 CKPT_NAME = f"ckpt_{args.model}.pt"
 HF_REPO   = os.environ["HF_REPO"]
 
-SAMPLE_PROMPTS = [
-    "Once upon a time",
-    "There was a little girl named",
-    "The dog wanted to",
-    "One day, a boy found a",
-]
+N_SAMPLE_PROMPTS = 4
+PROMPT_TOKENS    = 20   # tokens fed as context
+SAMPLE_NEW       = 20   # tokens to generate
 
 # ── device ────────────────────────────────────────────────────────────────────
 if torch.cuda.is_available():
@@ -62,6 +59,20 @@ def get_batch(tokens, batch_size, block_size):
 train_tokens = load_tokens("data_train.bin")
 val_tokens   = load_tokens("data_validation.bin")
 
+# extract story openings from the val set as fixed sample prompts
+def _val_prompts(n: int, prompt_tokens: int) -> list[str]:
+    prompts, i = [], 0
+    while len(prompts) < n and i < len(val_tokens) - prompt_tokens:
+        if val_tokens[i] == enc.eot_token:
+            toks = val_tokens[i+1 : i+1+prompt_tokens].tolist()
+            prompts.append(enc.decode(toks))
+            i += prompt_tokens
+        else:
+            i += 1
+    return prompts
+
+SAMPLE_PROMPTS = _val_prompts(N_SAMPLE_PROMPTS, PROMPT_TOKENS)
+
 # ── model ─────────────────────────────────────────────────────────────────────
 model = GPT(model_cfg).to(device)
 if device == "cuda":
@@ -72,7 +83,7 @@ optim = torch.optim.AdamW(model.parameters(), lr=args.lr, betas=(0.9, 0.95), wei
 
 # ── sampling ──────────────────────────────────────────────────────────────────
 @torch.no_grad()
-def generate(prompt: str, max_new: int = 100, temperature: float = 0.8) -> str:
+def generate(prompt: str, max_new: int = SAMPLE_NEW, temperature: float = 0.8) -> str:
     model.eval()
     tokens = enc.encode(prompt)
     idx = torch.tensor([tokens], device=device)
