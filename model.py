@@ -19,6 +19,12 @@ class Config:
         return cls(n_embd=32, n_head=2, n_layer=2, block_size=64)
 
     @classmethod
+    def medium(cls):
+        """~21M params — local training experiments and cheap remote runs.
+        Fits in MPS memory during training (batch=16, block=512 → ~400MB total)."""
+        return cls(n_embd=256, n_head=8, n_layer=8, block_size=512)
+
+    @classmethod
     def base(cls):
         """~117M params — production; comfortably fits on M4+ MPS at float16 (~250MB)."""
         return cls(n_embd=768, n_head=12, n_layer=12, block_size=1024)

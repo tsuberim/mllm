@@ -12,24 +12,22 @@ from huggingface_hub import HfApi
 
 from model import GPT, Config
 
-# ── config ────────────────────────────────────────────────────────────────────
+# ── args ──────────────────────────────────────────────────────────────────────
 parser = argparse.ArgumentParser()
-parser.add_argument("--model", choices=["tiny", "base"], default="base")
+parser.add_argument("--model",      choices=["tiny", "medium", "base"], required=True)
+parser.add_argument("--batch_size", type=int,   required=True)
+parser.add_argument("--max_steps",  type=int,   required=True)
+parser.add_argument("--val_every",  type=int,   required=True)
+parser.add_argument("--val_steps",  type=int,   required=True)
+parser.add_argument("--save_every", type=int,   required=True)
+parser.add_argument("--lr",         type=float, default=3e-4)
+parser.add_argument("--grad_clip",  type=float, default=1.0)
+parser.add_argument("--wandb",      choices=["online", "disabled"], default="online")
 args = parser.parse_args()
 
-is_tiny = args.model == "tiny"
-model_cfg = Config.tiny() if is_tiny else Config.base()
-
-lr          = 3e-4
-max_steps   = 2        if is_tiny else 20_000
-batch_size  = 2        if is_tiny else 64
-val_every   = 1        if is_tiny else 500
-val_steps   = 2        if is_tiny else 50
-save_every  = 1        if is_tiny else 1_000
-grad_clip   = 1.0
-
-HF_REPO     = os.environ["HF_REPO"]
-CKPT_NAME   = "ckpt.pt"
+model_cfg = {"tiny": Config.tiny, "medium": Config.medium, "base": Config.base}[args.model]()
+CKPT_NAME = f"ckpt_{args.model}.pt"
+HF_REPO   = os.environ["HF_REPO"]
 
 # ── device ────────────────────────────────────────────────────────────────────
 if torch.cuda.is_available():
@@ -61,10 +59,10 @@ if device == "cuda":
     model = torch.compile(model)
 print(f"params: {model.num_params():,}")
 
-optim = torch.optim.AdamW(model.parameters(), lr=lr, betas=(0.9, 0.95), weight_decay=0.1)
+optim = torch.optim.AdamW(model.parameters(), lr=args.lr, betas=(0.9, 0.95), weight_decay=0.1)
 
 # ── checkpoint ────────────────────────────────────────────────────────────────
-hf = None if is_tiny else HfApi()
+hf = HfApi() if args.wandb == "online" else None
 start_step = 0
 
 def save_checkpoint(step):
@@ -100,41 +98,42 @@ load_checkpoint()
 
 # ── wandb ─────────────────────────────────────────────────────────────────────
 wandb.init(
-    project="mllm", resume="allow", mode="disabled" if is_tiny else "online",
-    config={**model_cfg.__dict__, "batch_size": batch_size, "lr": lr, "max_steps": max_steps, "device": device},
+    project="mllm", resume="allow", mode=args.wandb,
+    config={**model_cfg.__dict__, "batch_size": args.batch_size, "lr": args.lr,
+            "max_steps": args.max_steps, "device": device},
 )
 
 # ── training loop ─────────────────────────────────────────────────────────────
-pbar = tqdm(range(start_step, max_steps), initial=start_step, total=max_steps)
+pbar = tqdm(range(start_step, args.max_steps), initial=start_step, total=args.max_steps)
 
 for step in pbar:
     model.train()
-    x, y = get_batch(train_tokens, batch_size, model_cfg.block_size)
+    x, y = get_batch(train_tokens, args.batch_size, model_cfg.block_size)
     _, loss = model(x, y)
 
     optim.zero_grad()
     loss.backward()
-    torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+    torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
     optim.step()
 
     log = {"train/loss": loss.item()}
 
-    if step % val_every == 0:
+    if step % args.val_every == 0:
         model.eval()
         with torch.no_grad():
             val_loss = sum(
-                model(*get_batch(val_tokens, batch_size, model_cfg.block_size))[1].item()
-                for _ in range(val_steps)
-            ) / val_steps
+                model(*get_batch(val_tokens, args.batch_size, model_cfg.block_size))[1].item()
+                for _ in range(args.val_steps)
+            ) / args.val_steps
         log["val/loss"] = val_loss
         pbar.set_postfix(train=f"{loss.item():.4f}", val=f"{val_loss:.4f}")
     else:
         pbar.set_postfix(train=f"{loss.item():.4f}")
 
-    if step % save_every == 0:
+    if step % args.save_every == 0:
         save_checkpoint(step)
 
     wandb.log(log, step=step)
 
-save_checkpoint(max_steps - 1)
+save_checkpoint(args.max_steps - 1)
 wandb.finish()

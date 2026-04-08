@@ -52,7 +52,7 @@ def bench(weights_path: str, cfg: Config, prompt: str, n_tokens: int, bits: int 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model",    choices=["tiny", "base"], default="base")
+    parser.add_argument("--model",    choices=["tiny", "medium", "base"], default="base")
     parser.add_argument("--weights",  default="base_random.npz")
     parser.add_argument("--prompt",   default="Once upon a time")
     parser.add_argument("--n_tokens", type=int, default=500)
@@ -60,5 +60,5 @@ if __name__ == "__main__":
                         help="quantization bits (0 = none)")
     args = parser.parse_args()
 
-    cfg = Config.tiny() if args.model == "tiny" else Config.base()
+    cfg = {"tiny": Config.tiny, "medium": Config.medium, "base": Config.base}[args.model]()
     bench(args.weights, cfg, args.prompt, args.n_tokens, bits=args.bits)

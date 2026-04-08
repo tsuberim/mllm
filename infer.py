@@ -49,6 +49,9 @@ class Config:
     def base(cls): return cls()
 
     @classmethod
+    def medium(cls): return cls(n_embd=256, n_head=8, n_layer=8, block_size=512)
+
+    @classmethod
     def tiny(cls): return cls(n_embd=32, n_head=2, n_layer=2, block_size=64)
 
 
