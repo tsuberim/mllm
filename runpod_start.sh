@@ -55,13 +55,12 @@ echo "→ starting training (${TRAIN_SCRIPT:-train_macbook.sh}, 5h limit)..."
 timeout 5h bash "${TRAIN_SCRIPT:-train_macbook.sh}" 2>&1 | tee /workspace/train.log
 EXIT=${PIPESTATUS[0]}
 
-if [ $EXIT -eq 124 ]; then
-    echo "→ 5h limit reached — terminating pod. Resume manually when ready."
+if [ $EXIT -eq 0 ] || [ $EXIT -eq 124 ]; then
+    echo "→ training done/timeout (code $EXIT) — terminating pod."
+    curl -s "https://api.runpod.io/graphql?api_key=${RUNPOD_API_KEY}" \
+      -H "Content-Type: application/json" \
+      -d "{\"query\": \"mutation { podTerminate(input: {podId: \\\"${RUNPOD_POD_ID:-}\\\"}) }\"}" || true
 else
-    echo "→ training exited (code $EXIT) — terminating pod."
+    echo "→ training crashed (code $EXIT) — pod kept alive for debugging. SSH in and check /workspace/train.log"
+    sleep infinity
 fi
-
-# ── terminate pod to stop billing ─────────────────────────────────────────────
-curl -s "https://api.runpod.io/graphql?api_key=${RUNPOD_API_KEY}" \
-  -H "Content-Type: application/json" \
-  -d "{\"query\": \"mutation { podTerminate(input: {podId: \\\"${RUNPOD_POD_ID:-}\\\"}) }\"}"
