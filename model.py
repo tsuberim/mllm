@@ -10,23 +10,30 @@ class Config:
     block_size:  int   = 1024
     n_embd:      int   = 768
     n_head:      int   = 12
+    n_kv_head:   int   = 4       # GQA: fewer KV heads than Q heads
     n_layer:     int   = 12
     mlp_ratio:   float = 4.0
 
     @classmethod
-    def tiny(cls):
+    def sanity(cls):
         """~200K params — local pipeline testing only."""
-        return cls(n_embd=32, n_head=2, n_layer=2, block_size=64)
+        return cls(n_embd=32, n_head=2, n_kv_head=2, n_layer=2, block_size=64)
 
     @classmethod
-    def medium(cls):
+    def experiment(cls):
         """~21M params — local training experiments and cheap remote runs."""
-        return cls(n_embd=256, n_head=8, n_layer=8, block_size=512)
+        return cls(n_embd=256, n_head=8, n_kv_head=2, n_layer=8, block_size=512)
+
 
     @classmethod
-    def base(cls):
-        """~117M params — production target."""
-        return cls(n_embd=768, n_head=12, n_layer=12, block_size=1024)
+    def iphone(cls):
+        """~3.17B params — iPhone target. head_dim=128, block_size=4096."""
+        return cls(n_embd=3072, n_head=24, n_kv_head=8, n_layer=20, block_size=4096)
+
+    @classmethod
+    def macbook(cls):
+        """~7.19B params — MacBook target. head_dim=128, block_size=4096."""
+        return cls(n_embd=4096, n_head=32, n_kv_head=8, n_layer=26, block_size=4096)
 
 
 # ── RoPE ──────────────────────────────────────────────────────────────────────
@@ -43,7 +50,7 @@ def rotate_half(x):
     return torch.cat([-x[..., d:], x[..., :d]], dim=-1)
 
 def apply_rope(q, k, cos, sin):
-    # q, k: [B, H, T, D]; cos/sin: [T, D] → broadcast as [1, 1, T, D]
+    # q: [B, n_head, T, D]; k: [B, n_kv_head, T, D]; cos/sin: [T, D]
     cos = cos[None, None]
     sin = sin[None, None]
     return q * cos + rotate_half(q) * sin, k * cos + rotate_half(k) * sin
@@ -64,21 +71,28 @@ class RMSNorm(nn.Module):
 class Attention(nn.Module):
     def __init__(self, cfg):
         super().__init__()
-        self.n_head   = cfg.n_head
-        self.head_dim = cfg.n_embd // cfg.n_head
-        self.qkv  = nn.Linear(cfg.n_embd, 3 * cfg.n_embd, bias=False)
-        self.proj = nn.Linear(cfg.n_embd, cfg.n_embd, bias=False)
+        self.n_head    = cfg.n_head
+        self.n_kv_head = cfg.n_kv_head
+        self.head_dim  = cfg.n_embd // cfg.n_head
+        self.q_proj  = nn.Linear(cfg.n_embd, cfg.n_head * self.head_dim, bias=False)
+        self.kv_proj = nn.Linear(cfg.n_embd, 2 * cfg.n_kv_head * self.head_dim, bias=False)
+        self.proj    = nn.Linear(cfg.n_embd, cfg.n_embd, bias=False)
         cos, sin = precompute_rope_freqs(self.head_dim, cfg.block_size)
         self.register_buffer("rope_cos", cos)
         self.register_buffer("rope_sin", sin)
 
     def forward(self, x):
         B, T, C = x.shape
-        q, k, v = self.qkv(x).split(C, dim=-1)
-        q = q.view(B, T, self.n_head, self.head_dim).transpose(1, 2)
-        k = k.view(B, T, self.n_head, self.head_dim).transpose(1, 2)
-        v = v.view(B, T, self.n_head, self.head_dim).transpose(1, 2)
+        q  = self.q_proj(x).view(B, T, self.n_head, self.head_dim).transpose(1, 2)
+        kv = self.kv_proj(x).view(B, T, 2 * self.n_kv_head, self.head_dim)
+        k, v = kv.split(self.n_kv_head, dim=2)
+        k = k.transpose(1, 2)
+        v = v.transpose(1, 2)
         q, k = apply_rope(q, k, self.rope_cos[:T], self.rope_sin[:T])
+        # Expand KV heads to match Q heads for SDPA
+        gqa = self.n_head // self.n_kv_head
+        k = k.repeat_interleave(gqa, dim=1)
+        v = v.repeat_interleave(gqa, dim=1)
         y = F.scaled_dot_product_attention(q, k, v, is_causal=True)
         return self.proj(y.transpose(1, 2).contiguous().view(B, T, C))
 

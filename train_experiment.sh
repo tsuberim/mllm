@@ -1,6 +1,6 @@
 #!/bin/sh
 python train.py \
-  --model      medium \
+  --model      experiment \
   --batch_size 8 \
   --max_steps  2000 \
   --val_every  200 \

@@ -202,8 +202,8 @@
     <span class="badge blue">PyTorch + MLX</span>
     <span class="badge blue">Apple Silicon</span>
     <span class="badge green">MIT License</span>
-    <span class="badge">117M params</span>
-    <span class="badge">TinyStories</span>
+    <span class="badge">3B iPhone · 7B MacBook</span>
+    <span class="badge">Knowledge Distillation</span>
   </div>
   <a class="cta" href="https://github.com/tsuberim/merlin">
     View on GitHub →
@@ -213,8 +213,8 @@
 <main>
 
   <section>
-    <h2>Benchmarks — Base Model (M4 MacBook Pro)</h2>
-    <p>Base model, ~117M parameters. Quantization and KV cache measured end-to-end including prefill.</p>
+    <h2>Benchmarks — Prototype (M4 MacBook Pro)</h2>
+    <p>Prototype, ~117M parameters. Target is 1B with distillation from Qwen2.5-3B. Quantization and KV cache measured end-to-end including prefill.</p>
     <table>
       <thead>
         <tr>
@@ -257,14 +257,19 @@
         <div class="sub">fits on iPhone (≤4 GB)</div>
       </div>
       <div class="card">
-        <div class="label">Parameters</div>
-        <div class="value">117M</div>
-        <div class="sub">base config</div>
+        <div class="label">iPhone target</div>
+        <div class="value">~3B</div>
+        <div class="sub">3.17B · int4 ≈ 1.5 GB</div>
       </div>
       <div class="card">
-        <div class="label">Training tokens</div>
-        <div class="value">474M</div>
-        <div class="sub">TinyStories dataset</div>
+        <div class="label">MacBook target</div>
+        <div class="value">~7B</div>
+        <div class="sub">7.19B · int4 ≈ 3.5 GB</div>
+      </div>
+      <div class="card">
+        <div class="label">Training</div>
+        <div class="value">KD</div>
+        <div class="sub">Qwen2.5-3B teacher</div>
       </div>
     </div>
   </section>
@@ -287,6 +292,8 @@
         <tr><td>tiny</td><td>~1.6M</td><td>32</td><td>2</td><td>2</td><td>64</td></tr>
         <tr><td>medium</td><td>~21M</td><td>256</td><td>8</td><td>8</td><td>512</td></tr>
         <tr><td>base</td><td>~117M</td><td>768</td><td>12</td><td>12</td><td>1024</td></tr>
+        <tr class="highlight"><td>iphone</td><td>~3.17B</td><td>3072</td><td>24</td><td>20</td><td>4096</td></tr>
+        <tr class="highlight"><td>macbook</td><td>~7.19B</td><td>4096</td><td>32</td><td>26</td><td>4096</td></tr>
       </tbody>
     </table>
     <p style="margin-top:1rem">Key choices: RMSNorm, SwiGLU MLP, weight tying, pre-norm, no bias on linear layers.</p>
@@ -300,7 +307,8 @@
       <span class="chip">Triton (planned kernels)</span>
       <span class="chip">CoreML (iPhone, planned)</span>
       <span class="chip">tiktoken GPT-2</span>
-      <span class="chip">TinyStories</span>
+      <span class="chip">FineWeb-Edu</span>
+      <span class="chip">Knowledge Distillation</span>
       <span class="chip">W&amp;B</span>
       <span class="chip">HuggingFace Hub</span>
     </div>

@@ -64,8 +64,8 @@ def bench(weights_path: str, cfg: Config, prompt: str, n_tokens: int,
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model",    choices=["tiny", "medium", "base"], default="base")
-    parser.add_argument("--weights",  default="base_random.npz")
+    parser.add_argument("--model",    choices=["sanity", "experiment", "iphone", "macbook"], default="iphone")
+    parser.add_argument("--weights",  default="checkpoints/weights.npz")
     parser.add_argument("--prompt",   default="Once upon a time")
     parser.add_argument("--n_tokens", type=int, default=500)
     parser.add_argument("--bits",     type=int, default=0, choices=[0, 4, 8],
@@ -74,5 +74,5 @@ if __name__ == "__main__":
                         help="number of timed runs to average")
     args = parser.parse_args()
 
-    cfg = {"tiny": Config.tiny, "medium": Config.medium, "base": Config.base}[args.model]()
+    cfg = {"sanity": Config.sanity, "experiment": Config.experiment, "iphone": Config.iphone, "macbook": Config.macbook}[args.model]()
     bench(args.weights, cfg, args.prompt, args.n_tokens, bits=args.bits, runs=args.runs)

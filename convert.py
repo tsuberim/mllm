@@ -5,7 +5,7 @@ import numpy as np
 
 _SKIP = {"rope_cos", "rope_sin"}  # computed from scratch in MLX — not saved
 
-def main(ckpt_path="ckpt.pt", out_path="weights.npz"):
+def main(ckpt_path="checkpoints/ckpt.pt", out_path="checkpoints/weights.npz"):
     ckpt = torch.load(ckpt_path, map_location="cpu")
     weights = {k: v.float().numpy() for k, v in ckpt["model"].items()
                if not any(k.endswith(s) for s in _SKIP)}

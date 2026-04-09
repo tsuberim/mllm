@@ -4,11 +4,12 @@ GPT-style decoder-only transformer. Design choices favour inference efficiency o
 
 ## Configs
 
-| Name | Params | n_embd | n_head | n_layer | block_size | Use |
-|------|--------|--------|--------|---------|------------|-----|
-| tiny | ~1.6M | 32 | 2 | 2 | 64 | Pipeline sanity checks only |
-| medium | ~21M | 256 | 8 | 8 | 512 | Local training experiments |
-| base | ~117M | 768 | 12 | 12 | 1024 | Production target |
+| Name | Params | n_embd | n_head | n_kv_head | n_layer | block_size | Use |
+|------|--------|--------|--------|-----------|---------|------------|-----|
+| sanity | ~1.6M | 32 | 2 | 2 | 2 | 64 | Pipeline sanity checks only |
+| experiment | ~21M | 256 | 8 | 2 | 8 | 512 | Local training experiments |
+| iphone | ~3.17B | 3072 | 24 | 8 | 20 | 4096 | iPhone target |
+| macbook | ~7.19B | 4096 | 32 | 8 | 26 | 4096 | MacBook target |
 
 Param counts are dominated by the vocabulary embedding (50257 × n_embd).
 
@@ -24,7 +25,9 @@ Better loss/param than GELU at the same parameter count. Hidden dim rounded up t
 
 **Weight tying** — `tok_emb.weight` and `head.weight` are the same tensor. Saves ~vocab_size × n_embd params (~39M for base).
 
-**Learned positional embeddings** — simple, good enough for now. RoPE is the next upgrade (better extrapolation, no learned parameters).
+**RoPE** (Rotary Position Embeddings) — applied to Q and K in each attention layer. Better length extrapolation than learned embeddings; no learned parameters.
+
+**GQA** (Grouped Query Attention) — fewer KV heads than Q heads (4:1 ratio for base). 3× smaller KV cache; MLX sdpa handles GQA natively.
 
 **No bias** on any linear layer — standard modern practice, marginal speed benefit.
 

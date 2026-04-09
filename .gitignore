@@ -4,3 +4,5 @@
 *.pt
 *.npz
 __pycache__/
+.pytest_cache/
+wandb/

@@ -25,13 +25,14 @@ int4 + KV cache hits 625 TPS at 188 MB — well within iPhone's ~4 GB budget.
 
 ## Architecture
 
-GPT-style decoder-only transformer with three configs:
+GPT-style decoder-only transformer with four configs:
 
 | Config | Params | n_embd | n_head | n_layer | block_size |
 |---|---|---|---|---|---|
-| tiny | ~1.6M | 32 | 2 | 2 | 64 |
-| medium | ~21M | 256 | 8 | 8 | 512 |
-| base | ~117M | 768 | 12 | 12 | 1024 |
+| sanity | ~1.6M | 32 | 2 | 2 | 64 |
+| experiment | ~21M | 256 | 8 | 8 | 512 |
+| iphone | ~3.17B | 3072 | 24 | 20 | 4096 |
+| macbook | ~7.19B | 4096 | 32 | 26 | 4096 |
 
 Key design choices:
 - **RMSNorm** — faster, no mean subtraction
@@ -63,13 +64,13 @@ pip install -r requirements.txt
 
 ```sh
 # Sanity check (2 steps, ~seconds)
-./train_tiny.sh
+./train_sanity.sh
 
 # Local experiment (2000 steps, ~10 min on MPS)
-./train_medium.sh
+./train_experiment.sh
 
-# Production (20k steps, requires CUDA)
-./train_base.sh
+# iPhone scale (requires NVIDIA)
+./train_iphone.sh
 ```
 
 ## Inference

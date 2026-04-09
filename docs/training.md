@@ -11,21 +11,21 @@ python data.py   # tokenizes TinyStories → data_train.bin, data_validation.bin
 ## Running
 
 ```sh
-./train_tiny.sh    # 2 steps, batch 2 — pipeline sanity check only
-./train_medium.sh  # 2k steps, batch 8, MPS-safe (~10 min locally)
-./train_base.sh    # 20k steps, batch 64 — needs NVIDIA
+./train_sanity.sh     # 2 steps, batch 2 — pipeline sanity check only
+./train_experiment.sh # 2k steps, batch 8, MPS-safe (~10 min locally)
+./train_iphone.sh     # iphone scale — needs NVIDIA
 ```
 
 ## Hyperparameters
 
-| | tiny | medium | base |
-|---|---|---|---|
-| batch_size | 2 | 8 | 64 |
-| max_steps | 2 | 2000 | 20000 |
-| val_every | 1 | 200 | 500 |
-| save_every | 1 | 200 | 1000 |
-| lr | 3e-4 | 3e-4 | 3e-4 |
-| wandb | disabled | online | online |
+| | sanity | experiment |
+|---|---|---|
+| batch_size | 2 | 8 |
+| max_steps | 2 | 2000 |
+| val_every | 1 | 200 |
+| save_every | 1 | 200 |
+| lr | 3e-4 | 3e-4 |
+| wandb | disabled | online |
 
 ## Observability
 

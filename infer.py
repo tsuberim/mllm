@@ -65,34 +65,42 @@ def get_rope_slice(head_dim: int, max_seq_len: int, past_len: int, T: int):
 # rotate_half convention:
 #   d < D/2 → out[d] = x[d]*cos[d] - x[d+D/2]*sin[d]
 #   d ≥ D/2 → out[d] = x[d]*cos[d] + x[d-D/2]*sin[d]
+#
+# GQA support: dispatches q.size threads; for elem < k_size the thread also
+# writes k_out. k has fewer heads than q (n_kv_head < n_head) but the same
+# D and T, so the same rotation formula applies — just a smaller array.
 _rope2_kernel = mx.fast.metal_kernel(
     name="rope2",
     input_names=["q", "k", "cos_vals", "sin_vals", "params"],
     output_names=["q_out", "k_out"],
     source="""
-        uint elem  = thread_position_in_grid.x;
-        uint D     = params[0];
-        uint T     = params[1];
-        uint d     = elem % D;
-        uint t     = (elem / D) % T;
-        uint hd    = D / 2;
-        float c    = cos_vals[t * D + d];
-        float s    = sin_vals[t * D + d];
-        uint  pair = (d < hd) ? elem + hd : elem - hd;
-        float sgn  = (d < hd) ? -1.0f : 1.0f;
+        uint elem   = thread_position_in_grid.x;
+        uint D      = params[0];
+        uint T      = params[1];
+        uint k_size = params[2];
+        uint d      = elem % D;
+        uint t      = (elem / D) % T;
+        uint hd     = D / 2;
+        float c     = cos_vals[t * D + d];
+        float s     = sin_vals[t * D + d];
+        uint  pair  = (d < hd) ? elem + hd : elem - hd;
+        float sgn   = (d < hd) ? -1.0f : 1.0f;
         q_out[elem] = q[elem] * c + sgn * q[pair] * s;
-        k_out[elem] = k[elem] * c + sgn * k[pair] * s;
+        if (elem < k_size) {
+            k_out[elem] = k[elem] * c + sgn * k[pair] * s;
+        }
     """,
 )
 
-_rope2_params_cache: dict = {}   # (D, T) → params array
+_rope2_params_cache: dict = {}   # (D, T, k_size) → params array
 
 def rope2(q: mx.array, k: mx.array, cos: mx.array, sin: mx.array):
-    """Apply RoPE to q and k in one Metal dispatch."""
+    """Apply RoPE to q and k in one Metal dispatch. Supports GQA (k smaller than q)."""
     *_, T, D = q.shape
-    key = (D, T)
+    k_size = k.size
+    key = (D, T, k_size)
     if key not in _rope2_params_cache:
-        _rope2_params_cache[key] = mx.array([D, T], dtype=mx.uint32)
+        _rope2_params_cache[key] = mx.array([D, T, k_size], dtype=mx.uint32)
     params = _rope2_params_cache[key]
     size   = q.size
     out = _rope2_kernel(
@@ -141,17 +149,21 @@ class Config:
     block_size: int   = 1024
     n_embd:     int   = 768
     n_head:     int   = 12
+    n_kv_head:  int   = 4
     n_layer:    int   = 12
     mlp_ratio:  float = 4.0
 
     @classmethod
-    def base(cls): return cls()
+    def sanity(cls): return cls(n_embd=32, n_head=2, n_kv_head=2, n_layer=2, block_size=64)
 
     @classmethod
-    def medium(cls): return cls(n_embd=256, n_head=8, n_layer=8, block_size=512)
+    def experiment(cls): return cls(n_embd=256, n_head=8, n_kv_head=2, n_layer=8, block_size=512)
 
     @classmethod
-    def tiny(cls): return cls(n_embd=32, n_head=2, n_layer=2, block_size=64)
+    def iphone(cls): return cls(n_embd=3072, n_head=24, n_kv_head=8, n_layer=20, block_size=4096)
+
+    @classmethod
+    def macbook(cls): return cls(n_embd=4096, n_head=32, n_kv_head=8, n_layer=26, block_size=4096)
 
 
 class RMSNorm(nn.Module):
@@ -166,19 +178,21 @@ class RMSNorm(nn.Module):
 class Attention(nn.Module):
     def __init__(self, cfg: Config):
         super().__init__()
-        self.n_head   = cfg.n_head
-        self.head_dim = cfg.n_embd // cfg.n_head
-        self.scale    = self.head_dim ** -0.5
+        self.n_head    = cfg.n_head
+        self.n_kv_head = cfg.n_kv_head
+        self.head_dim  = cfg.n_embd // cfg.n_head
+        self.scale     = self.head_dim ** -0.5
         self._rope_len = cfg.block_size
-        self.qkv  = nn.Linear(cfg.n_embd, 3 * cfg.n_embd, bias=False)
-        self.proj = nn.Linear(cfg.n_embd, cfg.n_embd, bias=False)
+        self.q_proj  = nn.Linear(cfg.n_embd, cfg.n_head * self.head_dim, bias=False)
+        self.kv_proj = nn.Linear(cfg.n_embd, 2 * cfg.n_kv_head * self.head_dim, bias=False)
+        self.proj    = nn.Linear(cfg.n_embd, cfg.n_embd, bias=False)
 
     def __call__(self, x: mx.array, cache: KVCache | None = None):
         B, T, C = x.shape
-        q, k, v = mx.split(self.qkv(x), 3, axis=-1)
-        q = q.reshape(B, T, self.n_head, self.head_dim).transpose(0, 2, 1, 3)
-        k = k.reshape(B, T, self.n_head, self.head_dim).transpose(0, 2, 1, 3)
-        v = v.reshape(B, T, self.n_head, self.head_dim).transpose(0, 2, 1, 3)
+        q  = self.q_proj(x).reshape(B, T, self.n_head, self.head_dim).transpose(0, 2, 1, 3)
+        kv = self.kv_proj(x).reshape(B, T, 2 * self.n_kv_head, self.head_dim)
+        k  = kv[:, :, :self.n_kv_head, :].transpose(0, 2, 1, 3)
+        v  = kv[:, :, self.n_kv_head:, :].transpose(0, 2, 1, 3)
 
         past_len = cache.offset if cache is not None else 0
         cos, sin = get_rope_slice(self.head_dim, self._rope_len, past_len, T)
@@ -187,6 +201,7 @@ class Attention(nn.Module):
         if cache is not None:
             k, v = cache.update(k, v)
 
+        # MLX sdpa handles GQA natively (broadcasts k/v over q heads)
         y = mx.fast.scaled_dot_product_attention(
             q, k, v, scale=self.scale, mask="causal"
         ).transpose(0, 2, 1, 3).reshape(B, T, C)
@@ -229,7 +244,7 @@ class GPT(nn.Module):
         self.head    = nn.Linear(cfg.n_embd, cfg.vocab_size, bias=False)
 
     def make_cache(self) -> list[KVCache]:
-        return [KVCache(b.attn.n_head, b.attn.head_dim, self.cfg.block_size)
+        return [KVCache(b.attn.n_kv_head, b.attn.head_dim, self.cfg.block_size)
                 for b in self.blocks]
 
     def __call__(self, idx: mx.array, cache: list[KVCache] | None = None):
@@ -278,7 +293,7 @@ def load_model(weights_path: str, cfg: Config, bits: int = 0) -> GPT:
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model",    choices=["tiny", "medium", "base"], default="base")
+    parser.add_argument("--model",    choices=["sanity", "experiment", "iphone", "macbook"], default="iphone")
     parser.add_argument("--weights",  default="checkpoints/weights.npz")
     parser.add_argument("--prompt",   default="Once upon a time")
     parser.add_argument("--max_new",  type=int,   default=200)
@@ -290,7 +305,7 @@ if __name__ == "__main__":
     max_new_tokens = args.max_new
     temperature    = args.temp
 
-    cfg = {"tiny": Config.tiny, "medium": Config.medium, "base": Config.base}[args.model]()
+    cfg = {"sanity": Config.sanity, "experiment": Config.experiment, "iphone": Config.iphone, "macbook": Config.macbook}[args.model]()
     enc = tiktoken.get_encoding("gpt2")
 
     print(f"loading {weights_path}...")

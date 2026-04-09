@@ -6,7 +6,8 @@ Educational, but aimed at being genuinely useful and open source.
 ## Goals
 
 - Maximize inference TPS and minimize memory footprint on Apple Silicon (Mac and iPhone)
-- Train from scratch
+- Targets: ~3B (iPhone), ~7B (MacBook)
+- Knowledge distillation: Qwen2.5-14B teacher → 3B iPhone; Qwen2.5-32B teacher → 7B MacBook; offline logits
 - Custom kernels from the start — no relying on framework defaults
 - iPhone target: model must fit within ~4 GB RAM; CoreML export path planned
 

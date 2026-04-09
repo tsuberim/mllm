@@ -1,9 +1,9 @@
 #!/bin/sh
-# Convert latest checkpoint and sample from the medium model.
+# Convert latest checkpoint and sample from the iphone model.
 # Usage: ./sample.sh ["your prompt here"] [max_new_tokens]
-MODEL=medium
-CKPT="ckpt_${MODEL}.pt"
-WEIGHTS="weights_${MODEL}.npz"
+MODEL=iphone
+CKPT="checkpoints/ckpt_${MODEL}.pt"
+WEIGHTS="checkpoints/weights_${MODEL}.npz"
 PROMPT="${1:-Once upon a time}"
 MAX_NEW="${2:-200}"
 

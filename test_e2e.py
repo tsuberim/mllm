@@ -50,7 +50,7 @@ def test_swiglu_parity():
 # ── full model parity ─────────────────────────────────────────────────────────
 
 def test_e2e_parity():
-    cfg = Config.tiny()
+    cfg = Config.sanity()
 
     with tempfile.TemporaryDirectory() as tmp:
         ckpt_path    = f"{tmp}/ckpt.pt"
@@ -77,7 +77,7 @@ def test_e2e_parity():
         logits_pt = logits_pt.numpy()          # [1, T, vocab]
 
         # ── MLX forward ───────────────────────────────────────────────────────
-        infer_cfg = InferConfig.tiny()
+        infer_cfg = InferConfig.sanity()
         mlx_model = load_model(weights_path, infer_cfg)
         logits_mx, _ = mlx_model(mx.array(tokens_np))
         mx.eval(logits_mx)
@@ -101,7 +101,7 @@ def test_e2e_parity():
 
 def test_kv_cache_parity():
     """Prefill+decode via KV cache must match a single full-sequence forward pass."""
-    cfg = Config.tiny()
+    cfg = Config.sanity()
 
     with tempfile.TemporaryDirectory() as tmp:
         ckpt_path    = f"{tmp}/ckpt.pt"
@@ -118,7 +118,7 @@ def test_kv_cache_parity():
 
         tokens_np = torch.randint(0, cfg.vocab_size, (1, seq_len)).numpy()
 
-        infer_cfg = InferConfig.tiny()
+        infer_cfg = InferConfig.sanity()
         mlx_model = load_model(weights_path, infer_cfg)
 
         # ── reference: full sequence in one forward pass ───────────────────
@@ -151,7 +151,7 @@ def test_kv_cache_parity():
 
 def test_rope_offset():
     """A single token decoded at position P must get RoPE freqs for position P, not 0."""
-    cfg = Config.tiny()
+    cfg = Config.sanity()
 
     with tempfile.TemporaryDirectory() as tmp:
         ckpt_path    = f"{tmp}/ckpt.pt"
@@ -161,7 +161,7 @@ def test_rope_offset():
         torch.save(ckpt, ckpt_path)
         conv.main(ckpt_path, weights_path)
 
-        infer_cfg = InferConfig.tiny()
+        infer_cfg = InferConfig.sanity()
         mlx_model = load_model(weights_path, infer_cfg)
 
         torch.manual_seed(3)

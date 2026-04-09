@@ -16,7 +16,7 @@ from model import GPT, Config
 
 # ── args ──────────────────────────────────────────────────────────────────────
 parser = argparse.ArgumentParser()
-parser.add_argument("--model",      choices=["tiny", "medium", "base"], required=True)
+parser.add_argument("--model",      choices=["sanity", "experiment", "iphone", "macbook"], required=True)
 parser.add_argument("--batch_size", type=int,   required=True)
 parser.add_argument("--max_steps",  type=int,   required=True)
 parser.add_argument("--val_every",  type=int,   required=True)
@@ -28,8 +28,9 @@ parser.add_argument("--grad_clip",  type=float, default=1.0)
 parser.add_argument("--wandb",      choices=["online", "disabled"], default="online")
 args = parser.parse_args()
 
-model_cfg = {"tiny": Config.tiny, "medium": Config.medium, "base": Config.base}[args.model]()
-CKPT_NAME = f"ckpt_{args.model}.pt"
+model_cfg = {"sanity": Config.sanity, "experiment": Config.experiment, "iphone": Config.iphone, "macbook": Config.macbook}[args.model]()
+Path("checkpoints").mkdir(exist_ok=True)
+CKPT_NAME = f"checkpoints/ckpt_{args.model}.pt"
 HF_REPO   = os.environ["HF_REPO"]
 
 N_SAMPLE_PROMPTS = 4

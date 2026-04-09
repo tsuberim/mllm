@@ -1,6 +1,6 @@
 #!/bin/sh
 python train.py \
-  --model      tiny \
+  --model      sanity \
   --batch_size 2 \
   --max_steps  2 \
   --val_every  1 \
