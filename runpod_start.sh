@@ -63,8 +63,8 @@ else
 fi
 
 # ── train (5 hour safety cutoff) ──────────────────────────────────────────────
-echo "→ starting training (macbook model, bf16, H100, 5h limit)..."
-timeout 5h bash train_macbook.sh
+echo "→ starting training (${TRAIN_SCRIPT:-train_macbook.sh}, 5h limit)..."
+timeout 5h bash "${TRAIN_SCRIPT:-train_macbook.sh}"
 EXIT=$?
 
 if [ $EXIT -eq 124 ]; then
