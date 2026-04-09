@@ -13,7 +13,15 @@
 
 set -euo pipefail
 
-apt-get update -qq && apt-get install -y -qq git curl
+apt-get update -qq && apt-get install -y -qq git curl openssh-server
+# configure and start sshd so we can SSH in for log monitoring
+mkdir -p /run/sshd /root/.ssh
+chmod 700 /root/.ssh
+echo "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHuwG1CyywlisyukBnpx0iMb+zRiN6l4rzeg8I1W7pSg tsuberim@gmail.com" >> /root/.ssh/authorized_keys
+chmod 600 /root/.ssh/authorized_keys
+echo "PermitRootLogin yes" >> /etc/ssh/sshd_config
+echo "PasswordAuthentication no" >> /etc/ssh/sshd_config
+/usr/sbin/sshd
 
 REPO_URL="https://${GITHUB_TOKEN}@github.com/tsuberim/merlin.git"
 WORKDIR="/workspace/merlin"
