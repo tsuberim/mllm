@@ -36,7 +36,7 @@ Each val checkpoint logs to wandb:
 
 ## Checkpoints
 
-Saved locally as `ckpt_{model}.pt` and pushed to `tsuberim/mllm` on HuggingFace. Set `HF_REPO` in `.env`. Resumable — training picks up from last saved step.
+Saved locally as `ckpt_{model}.pt` and pushed to `tsuberim/merlin` on HuggingFace. Set `HF_REPO` in `.env`. Resumable — training picks up from last saved step.
 
 ## Data
 

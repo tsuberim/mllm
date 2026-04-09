@@ -1,4 +1,4 @@
-# mllm
+# merlin
 
 Build the most efficient small language model that runs locally on Apple Silicon — MacBook Pro and iPhone.
 Educational, but aimed at being genuinely useful and open source.

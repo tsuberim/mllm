@@ -169,7 +169,7 @@ load_checkpoint()
 
 # ── wandb ─────────────────────────────────────────────────────────────────────
 wandb.init(
-    project="mllm", resume="allow", mode=args.wandb,
+    project="merlin", resume="allow", mode=args.wandb,
     config={**model_cfg.__dict__, "batch_size": args.batch_size,
             "lr": args.lr, "lr_muon": args.lr_muon,
             "max_steps": args.max_steps, "device": device},

@@ -1,9 +1,9 @@
 #!/bin/bash
-# RunPod container startup script for mllm training.
+# RunPod container startup script for merlin training.
 #
 # Required RunPod environment variables:
 #   GITHUB_TOKEN   — personal access token with repo read access
-#   HF_REPO        — e.g. tsuberim/mllm
+#   HF_REPO        — e.g. tsuberim/merlin
 #   WANDB_API_KEY  — weights & biases API key
 #
 # Recommended pod config:
