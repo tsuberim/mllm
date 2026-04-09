@@ -44,7 +44,7 @@ cat > .env <<EOF
 HF_REPO=${HF_REPO}
 WANDB_API_KEY=${WANDB_API_KEY}
 EOF
-wandb login "$WANDB_API_KEY" --relogin --quiet
+wandb login "$WANDB_API_KEY" --relogin 2>&1 | tail -1
 
 # ── data ──────────────────────────────────────────────────────────────────────
 if [ ! -f "data_train.bin" ]; then
