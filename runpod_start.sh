@@ -13,7 +13,9 @@
 
 set -euo pipefail
 
-apt-get update -qq && apt-get install -y -qq git curl openssh-server
+# docker entrypoint already ran apt-get update + git clone/pull;
+# we only need openssh-server (not in base image) for SSH access.
+apt-get install -y -qq openssh-server
 # configure and start sshd so we can SSH in for log monitoring
 mkdir -p /run/sshd /root/.ssh
 chmod 700 /root/.ssh
@@ -22,19 +24,6 @@ chmod 600 /root/.ssh/authorized_keys
 echo "PermitRootLogin yes" >> /etc/ssh/sshd_config
 echo "PasswordAuthentication no" >> /etc/ssh/sshd_config
 /usr/sbin/sshd
-
-REPO_URL="https://${GITHUB_TOKEN}@github.com/tsuberim/merlin.git"
-WORKDIR="/workspace/merlin"
-
-# ── clone / update repo ───────────────────────────────────────────────────────
-if [ ! -d "$WORKDIR/.git" ]; then
-    echo "→ cloning repo..."
-    git clone "$REPO_URL" "$WORKDIR"
-else
-    echo "→ pulling latest..."
-    git -C "$WORKDIR" pull
-fi
-cd "$WORKDIR"
 
 # ── python deps ───────────────────────────────────────────────────────────────
 if [ ! -f ".deps_installed" ]; then
@@ -75,4 +64,4 @@ fi
 # ── terminate pod to stop billing ─────────────────────────────────────────────
 curl -s "https://api.runpod.io/graphql?api_key=${RUNPOD_API_KEY}" \
   -H "Content-Type: application/json" \
-  -d "{\"query\": \"mutation { podTerminate(input: {podId: \\\"${RUNPOD_POD_ID}\\\"}) }\"}"
+  -d "{\"query\": \"mutation { podTerminate(input: {podId: \\\"${RUNPOD_POD_ID:-}\\\"}) }\"}"
