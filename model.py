@@ -147,11 +147,22 @@ class GPT(nn.Module):
         x = self.tok_emb(idx)
         for block in self.blocks:
             x = block(x)
-        logits = self.head(self.norm(x))
-        loss = None
+        x = self.norm(x)
         if targets is not None:
-            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1))
-        return logits, loss
+            # chunked cross-entropy: avoids materialising full [B*T, V] logit tensor
+            # critical for large models where B*T*V can exceed 1.5 GB
+            chunk = max(1, T // 4)
+            chunks = range(0, T, chunk)
+            loss = sum(
+                F.cross_entropy(
+                    (x[:, i:i+chunk] @ self.head.weight.T).reshape(-1, self.cfg.vocab_size),
+                    targets[:, i:i+chunk].contiguous().reshape(-1),
+                )
+                for i in chunks
+            ) / len(chunks)
+            return None, loss
+        logits = self.head(x)
+        return logits, None
 
     def num_params(self):
         return sum(p.numel() for p in self.parameters())
