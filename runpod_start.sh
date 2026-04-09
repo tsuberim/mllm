@@ -13,6 +13,8 @@
 
 set -euo pipefail
 
+apt-get update -qq && apt-get install -y -qq git
+
 REPO_URL="https://${GITHUB_TOKEN}@github.com/tsuberim/merlin.git"
 WORKDIR="/workspace/merlin"
 
