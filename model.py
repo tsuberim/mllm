@@ -65,7 +65,7 @@ class RMSNorm(nn.Module):
         self.eps = eps
 
     def forward(self, x):
-        return x / x.pow(2).mean(-1, keepdim=True).add(self.eps).sqrt() * self.weight
+        return F.rms_norm(x, (x.shape[-1],), self.weight, self.eps)
 
 
 class Attention(nn.Module):
@@ -89,10 +89,10 @@ class Attention(nn.Module):
         k = k.transpose(1, 2)
         v = v.transpose(1, 2)
         q, k = apply_rope(q, k, self.rope_cos[:T], self.rope_sin[:T])
-        # Expand KV heads to match Q heads for SDPA
+        # Expand KV heads to match Q heads for SDPA (zero-copy view)
         gqa = self.n_head // self.n_kv_head
-        k = k.repeat_interleave(gqa, dim=1)
-        v = v.repeat_interleave(gqa, dim=1)
+        k = k.unsqueeze(2).expand(B, self.n_kv_head, gqa, T, self.head_dim).reshape(B, self.n_head, T, self.head_dim)
+        v = v.unsqueeze(2).expand(B, self.n_kv_head, gqa, T, self.head_dim).reshape(B, self.n_head, T, self.head_dim)
         y = F.scaled_dot_product_attention(q, k, v, is_causal=True)
         return self.proj(y.transpose(1, 2).contiguous().view(B, T, C))
 

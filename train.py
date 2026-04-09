@@ -1,6 +1,7 @@
 import os
 import io
 import argparse
+import contextlib
 from dotenv import load_dotenv
 load_dotenv()
 import torch
@@ -13,6 +14,7 @@ from tqdm import tqdm
 from huggingface_hub import HfApi
 
 from model import GPT, Config
+from optim import Muon
 
 # ── args ──────────────────────────────────────────────────────────────────────
 parser = argparse.ArgumentParser()
@@ -45,6 +47,11 @@ elif torch.backends.mps.is_available():
 else:
     device = "cpu"
 print(f"device: {device}")
+torch.set_float32_matmul_precision("high")  # TF32 on Ampere+; no-op elsewhere
+
+# bf16 autocast helps on CUDA (tensor cores); hurts on MPS (fp32 is native)
+autocast = (torch.autocast(device_type="cuda", dtype=torch.bfloat16)
+            if device == "cuda" else contextlib.nullcontext())
 
 # ── data ──────────────────────────────────────────────────────────────────────
 assert Path("data_train.bin").exists(), "run data.py first"
@@ -57,7 +64,7 @@ def get_batch(tokens, batch_size, block_size):
     ix = torch.randint(len(tokens) - block_size, (batch_size,))
     x = torch.stack([torch.from_numpy(tokens[i  :i+block_size  ].astype(np.int64)) for i in ix])
     y = torch.stack([torch.from_numpy(tokens[i+1:i+block_size+1].astype(np.int64)) for i in ix])
-    return x.to(device), y.to(device)
+    return x.to(device, non_blocking=True), y.to(device, non_blocking=True)
 
 train_tokens = load_tokens("data_train.bin")
 val_tokens   = load_tokens("data_validation.bin")
@@ -75,56 +82,6 @@ def _val_prompts(n: int, prompt_tokens: int) -> list[str]:
     return prompts
 
 SAMPLE_PROMPTS = _val_prompts(N_SAMPLE_PROMPTS, PROMPT_TOKENS)
-
-# ── Muon optimizer ────────────────────────────────────────────────────────────
-
-def zeropower_via_newtonschulz5(G: torch.Tensor, steps: int = 5) -> torch.Tensor:
-    """Coefficients from the Muon paper ensure convergence to the polar factor."""
-    assert G.ndim >= 2
-    a, b, c = 3.4445, -4.7750, 2.0315
-    # bfloat16 on CUDA for speed; float32 elsewhere (MPS, CPU)
-    dt = torch.bfloat16 if G.device.type == "cuda" else torch.float32
-    X  = G.to(dt) / (G.norm() + 1e-7)
-    if G.size(0) > G.size(1):
-        X = X.T
-    for _ in range(steps):
-        A = X @ X.T
-        B = b * A + c * (A @ A)
-        X = a * X + B @ X
-    if G.size(0) > G.size(1):
-        X = X.T
-    return X.to(G.dtype)
-
-
-class Muon(torch.optim.Optimizer):
-    """Reference: https://github.com/KellerJordan/Muon"""
-    def __init__(self, params, lr: float = 0.02, momentum: float = 0.95,
-                 nesterov: bool = True, ns_steps: int = 5):
-        defaults = dict(lr=lr, momentum=momentum, nesterov=nesterov, ns_steps=ns_steps)
-        super().__init__(params, defaults)
-
-    @torch.no_grad()
-    def step(self):
-        for group in self.param_groups:
-            lr, momentum = group["lr"], group["momentum"]
-            nesterov, ns_steps = group["nesterov"], group["ns_steps"]
-            for p in group["params"]:
-                if p.grad is None:
-                    continue
-                g = p.grad
-                state = self.state[p]
-                if "buf" not in state:
-                    state["buf"] = torch.zeros_like(g)
-                buf = state["buf"]
-                buf.mul_(momentum).add_(g)
-                update = g.add(buf, alpha=momentum) if nesterov else buf.clone()
-                if update.ndim == 2:
-                    # Orthogonalize via Newton-Schulz, then scale to match
-                    # the RMS of a standard SGD update at this LR.
-                    update = zeropower_via_newtonschulz5(update, steps=ns_steps)
-                    update *= max(1, update.size(0) / update.size(1)) ** 0.5
-                p.add_(update, alpha=-lr)
-
 
 # ── model ─────────────────────────────────────────────────────────────────────
 model = GPT(model_cfg).to(device)
@@ -147,7 +104,8 @@ for name, p in model.named_parameters():
         adam_params.append(p)
 
 optim_muon = Muon(muon_params, lr=args.lr_muon)
-optim_adam = torch.optim.AdamW(adam_params, lr=args.lr, betas=(0.9, 0.95), weight_decay=0.1)
+optim_adam = torch.optim.AdamW(adam_params, lr=args.lr, betas=(0.9, 0.95), weight_decay=0.1,
+                               fused=(device == "cuda"))
 
 # ── sampling ──────────────────────────────────────────────────────────────────
 @torch.no_grad()
@@ -155,12 +113,13 @@ def generate(prompt: str, max_new: int = SAMPLE_NEW, temperature: float = 0.8) -
     model.eval()
     tokens = enc.encode(prompt)
     idx = torch.tensor([tokens], device=device)
-    for _ in range(max_new):
-        idx_cond = idx[:, -model_cfg.block_size:]
-        logits, _ = model(idx_cond)
-        next_tok = torch.multinomial(
-            torch.softmax(logits[:, -1, :] / temperature, dim=-1), 1)
-        idx = torch.cat([idx, next_tok], dim=1)
+    with autocast:
+        for _ in range(max_new):
+            idx_cond = idx[:, -model_cfg.block_size:]
+            logits, _ = model(idx_cond)
+            next_tok = torch.multinomial(
+                torch.softmax(logits[:, -1, :] / temperature, dim=-1), 1)
+            idx = torch.cat([idx, next_tok], dim=1)
     return enc.decode(idx[0].tolist())
 
 # ── checkpoint ────────────────────────────────────────────────────────────────
@@ -221,10 +180,11 @@ pbar = tqdm(range(start_step, args.max_steps), initial=start_step,
 for step in pbar:
     model.train()
     x, y = get_batch(train_tokens, args.batch_size, model_cfg.block_size)
-    _, loss = model(x, y)
+    with autocast:
+        _, loss = model(x, y)
 
-    optim_muon.zero_grad()
-    optim_adam.zero_grad()
+    optim_muon.zero_grad(set_to_none=True)
+    optim_adam.zero_grad(set_to_none=True)
     loss.backward()
     grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip).item()
     optim_muon.step()
@@ -234,7 +194,7 @@ for step in pbar:
 
     if step % args.val_every == 0:
         model.eval()
-        with torch.no_grad():
+        with torch.no_grad(), autocast:
             val_loss = sum(
                 model(*get_batch(val_tokens, args.batch_size, model_cfg.block_size))[1].item()
                 for _ in range(args.val_steps)
