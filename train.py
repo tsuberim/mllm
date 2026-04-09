@@ -96,9 +96,7 @@ SAMPLE_PROMPTS = _val_prompts(N_SAMPLE_PROMPTS, PROMPT_TOKENS)
 dtype = torch.bfloat16 if args.bf16 else torch.float32
 model = GPT(model_cfg).to(device=device, dtype=dtype)
 if device == "cuda":
-    # max-autotune: Triton finds optimal tile sizes for this GPU's SM count/config
-    # one-time cost per model shape, cached in TORCHINDUCTOR_CACHE_DIR
-    model = torch.compile(model, mode="max-autotune")
+    model = torch.compile(model)
 print(f"params: {model.num_params():,}  dtype: {dtype}")
 
 # Muon for 2-D weight matrices inside transformer blocks;
