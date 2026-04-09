@@ -64,8 +64,8 @@ fi
 
 # ── train (5 hour safety cutoff) ──────────────────────────────────────────────
 echo "→ starting training (${TRAIN_SCRIPT:-train_macbook.sh}, 5h limit)..."
-timeout 5h bash "${TRAIN_SCRIPT:-train_macbook.sh}"
-EXIT=$?
+timeout 5h bash "${TRAIN_SCRIPT:-train_macbook.sh}" 2>&1 | tee /workspace/train.log
+EXIT=${PIPESTATUS[0]}
 
 if [ $EXIT -eq 124 ]; then
     echo "→ 5h limit reached — terminating pod. Resume manually when ready."
