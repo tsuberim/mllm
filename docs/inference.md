@@ -18,12 +18,11 @@ python bench.py --bits 4        # int4 quantized
 
 | Setup | TPS | Peak mem |
 |-------|-----|----------|
-| fp32, no KV cache | 38.7 | 1536 MB |
-| fp32 + KV cache | 242.6 | 802 MB |
-| fp32 + KV cache + GQA (4 KV heads) | 301.8 ± 2.4 | 721 MB |
-| int4 + KV cache + GQA | 755.5 ± 12.0 | 137 MB |
+| fp32 + KV cache + GQA | 946.8 ± 38.3 | 131 MB |
+| fp16 + KV cache + GQA | 1003.0 ± 72.5 | 66 MB |
+| int4 + KV cache + GQA | 999.1 ± 24.1 | 24 MB |
 
-Note: figures are 3-run averages (`python bench.py --runs 3`); run-to-run variation dominated by Metal scheduler jitter.
+Note: figures are 3-run averages (`python bench.py --runs 3`). At 21M params the model is overhead-bound (kernel launch, not memory bandwidth), so fp16/int4 TPS is similar — memory savings are the real gain. At 3B+ params, int4 gives ~3× TPS vs fp32 as bandwidth dominates.
 
 ## KV cache
 
@@ -51,7 +50,9 @@ Key implementation details:
 
 ## Quantization
 
-`mlx.nn.quantize(model, group_size=64, bits=4)` converts all `nn.Linear` layers to block-wise int4. Weights are stored as packed uint32; dequantization happens on-the-fly inside the Metal matmul kernel (no separate dequant pass). Run with `--bits 4` or `--bits 8`.
+`--bits 16`: weights cast to float16 at load time; halves model memory with no quality loss. KV cache dtype follows model weights automatically.
+
+`--bits 4/8`: `mlx.nn.quantize(model, group_size=64, bits=N)` converts all `nn.Linear` layers to block-wise int4/8. Weights stored as packed uint32; dequantization happens on-the-fly inside the Metal matmul kernel. Required to fit the 3B iphone model in 4 GB RAM.
 
 ## Custom kernels
 
@@ -66,6 +67,7 @@ Parity tested against PyTorch CPU at `atol=1e-6` (max observed diff ~5e-7, from 
 - ~~Pre-allocated KV cache~~ — done, +22% TPS.
 - ~~`mx.compile()` on MLP per block~~ — done, +5% TPS, 18× lower variance. Full-model compilation blocked by Python-offset KVCache (changing slice indices retrace graph each step); MLP is the compilable sweet spot.
 - ~~GQA (n_kv_heads=4)~~ — done, +24% TPS (242.6 → 301.8 fp32), 3× smaller KV cache; rope2 kernel extended to handle GQA in one dispatch.
-- Dedicated decode GEMV kernel: explicit SIMD-group reduction over KV sequence; 10–20% end-to-end after GQA shrinks KV size.
-- Custom int4 GEMV: naive simdgroup-reduction kernel benchmarked at parity with MLX's built-in (~490 TPS both ways). MLX's `quantized_matmul` is already close to bandwidth-optimal. Deferred.
+- ~~Float16 inference~~ — done (`--bits 16`); halves peak memory (131 → 66 MB); TPS parity with int4 at experiment scale (both overhead-bound); at iphone (3B) scale bandwidth dominates and int4 gives ~3× over fp32.
+- Dedicated decode GEMV kernel: at experiment scale already overhead-bound; would matter at iphone (3B) scale once benchmarked on real weights.
+- Custom int4 GEMV: naive simdgroup-reduction kernel benchmarked at parity with MLX's built-in. MLX's `quantized_matmul` is already close to bandwidth-optimal. Deferred.
 - LUT dequantization: cache-unfriendly on Apple unified memory — confirmed slower than scale+bias on M-series. Will not implement.

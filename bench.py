@@ -54,7 +54,7 @@ def bench(weights_path: str, cfg: Config, prompt: str, n_tokens: int,
     avg_tps  = sum(tps_vals) / runs
     std_tps  = (sum((t - avg_tps) ** 2 for t in tps_vals) / runs) ** 0.5
 
-    quant = f"int{bits}" if bits else "fp32"
+    quant = {0: "fp32", 16: "fp16", 4: "int4", 8: "int8"}.get(bits, f"int{bits}")
     print(f"model     : {args.model} ({quant})")
     print(f"tokens    : {n_tokens}  runs: {runs}")
     print(f"tps       : {avg_tps:.1f} ± {std_tps:.1f}")
@@ -68,8 +68,8 @@ if __name__ == "__main__":
     parser.add_argument("--weights",  default="checkpoints/weights.npz")
     parser.add_argument("--prompt",   default="Once upon a time")
     parser.add_argument("--n_tokens", type=int, default=500)
-    parser.add_argument("--bits",     type=int, default=0, choices=[0, 4, 8],
-                        help="quantization bits (0 = none)")
+    parser.add_argument("--bits",     type=int, default=0, choices=[0, 4, 8, 16],
+                        help="quantization bits (0=fp32, 16=fp16, 4/8=int quantized)")
     parser.add_argument("--runs",     type=int, default=3,
                         help="number of timed runs to average")
     args = parser.parse_args()

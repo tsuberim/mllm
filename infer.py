@@ -123,10 +123,10 @@ class KVCache:
     and copy the full cache every token (~18.9 MB/token at T=512 for the base model).
     After mx.eval(), MLX can reuse the existing buffer for subsequent scatter ops.
     """
-    def __init__(self, n_head: int, head_dim: int, max_T: int):
+    def __init__(self, n_head: int, head_dim: int, max_T: int, dtype=mx.float32):
         self.offset = 0
-        self.k = mx.zeros((1, n_head, max_T, head_dim))
-        self.v = mx.zeros((1, n_head, max_T, head_dim))
+        self.k = mx.zeros((1, n_head, max_T, head_dim), dtype=dtype)
+        self.v = mx.zeros((1, n_head, max_T, head_dim), dtype=dtype)
         mx.eval(self.k, self.v)
 
     def update(self, k: mx.array, v: mx.array) -> tuple[mx.array, mx.array]:
@@ -244,7 +244,8 @@ class GPT(nn.Module):
         self.head    = nn.Linear(cfg.n_embd, cfg.vocab_size, bias=False)
 
     def make_cache(self) -> list[KVCache]:
-        return [KVCache(b.attn.n_kv_head, b.attn.head_dim, self.cfg.block_size)
+        dtype = self.tok_emb.weight.dtype
+        return [KVCache(b.attn.n_kv_head, b.attn.head_dim, self.cfg.block_size, dtype=dtype)
                 for b in self.blocks]
 
     def __call__(self, idx: mx.array, cache: list[KVCache] | None = None):
@@ -275,6 +276,8 @@ class GPT(nn.Module):
 def load_model(weights_path: str, cfg: Config, bits: int = 0) -> GPT:
     model = GPT(cfg)
     weights = list(mx.load(weights_path).items())
+    if bits == 16:
+        weights = [(k, v.astype(mx.float16)) for k, v in weights]
     model.load_weights(weights)
     if bits in (4, 8):
         nn.quantize(model, group_size=64, bits=bits)
@@ -298,6 +301,8 @@ if __name__ == "__main__":
     parser.add_argument("--prompt",   default="Once upon a time")
     parser.add_argument("--max_new",  type=int,   default=200)
     parser.add_argument("--temp",     type=float, default=0.8)
+    parser.add_argument("--bits",     type=int,   default=0, choices=[0, 4, 8, 16],
+                        help="weight precision (0=fp32, 16=fp16, 4/8=int quantized)")
     args = parser.parse_args()
 
     weights_path   = args.weights
@@ -309,7 +314,7 @@ if __name__ == "__main__":
     enc = tiktoken.get_encoding("gpt2")
 
     print(f"loading {weights_path}...")
-    model = load_model(weights_path, cfg)
+    model = load_model(weights_path, cfg, bits=args.bits)
 
     tokens = enc.encode(prompt)
     idx = mx.array([tokens])
