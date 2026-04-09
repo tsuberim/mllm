@@ -1,0 +1,69 @@
+#!/bin/bash
+# RunPod container startup script for mllm training.
+#
+# Required RunPod environment variables:
+#   GITHUB_TOKEN   — personal access token with repo read access
+#   HF_REPO        — e.g. tsuberim/mllm
+#   WANDB_API_KEY  — weights & biases API key
+#
+# Recommended pod config:
+#   GPU:  1× H100 SXM 80 GB
+#   Disk: 50 GB (repo + data + checkpoints)
+#   Image: pytorch/pytorch:2.5.1-cuda12.4-cudnn9-devel
+
+set -euo pipefail
+
+REPO_URL="https://${GITHUB_TOKEN}@github.com/tsuberim/merlin.git"
+WORKDIR="/workspace/merlin"
+
+# ── clone / update repo ───────────────────────────────────────────────────────
+if [ ! -d "$WORKDIR/.git" ]; then
+    echo "→ cloning repo..."
+    git clone "$REPO_URL" "$WORKDIR"
+else
+    echo "→ pulling latest..."
+    git -C "$WORKDIR" pull
+fi
+cd "$WORKDIR"
+
+# ── python deps ───────────────────────────────────────────────────────────────
+if [ ! -f ".deps_installed" ]; then
+    echo "→ installing dependencies..."
+    pip install --quiet --upgrade pip
+    # mlx is Mac-only — skip it on CUDA
+    grep -v "^mlx" requirements.txt | pip install --quiet -r /dev/stdin
+    touch .deps_installed
+else
+    echo "→ deps already installed"
+fi
+
+# ── env ───────────────────────────────────────────────────────────────────────
+cat > .env <<EOF
+HF_REPO=${HF_REPO}
+WANDB_API_KEY=${WANDB_API_KEY}
+EOF
+wandb login "$WANDB_API_KEY" --relogin --quiet
+
+# ── data ──────────────────────────────────────────────────────────────────────
+if [ ! -f "data_train.bin" ]; then
+    echo "→ tokenizing TinyStories (~5 min)..."
+    python data.py
+else
+    echo "→ data already prepared"
+fi
+
+# ── train (5 hour safety cutoff) ──────────────────────────────────────────────
+echo "→ starting training (macbook model, bf16, H100, 5h limit)..."
+timeout 5h bash train_macbook.sh
+EXIT=$?
+
+if [ $EXIT -eq 124 ]; then
+    echo "→ 5h limit reached — terminating pod. Resume manually when ready."
+else
+    echo "→ training exited (code $EXIT) — terminating pod."
+fi
+
+# ── terminate pod to stop billing ─────────────────────────────────────────────
+curl -s "https://api.runpod.io/graphql?api_key=${RUNPOD_API_KEY}" \
+  -H "Content-Type: application/json" \
+  -d "{\"query\": \"mutation { podTerminate(input: {podId: \\\"${RUNPOD_POD_ID}\\\"}) }\"}"

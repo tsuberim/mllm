@@ -28,6 +28,7 @@ parser.add_argument("--lr",         type=float, default=3e-4,  help="AdamW lr (e
 parser.add_argument("--lr_muon",    type=float, default=0.02,  help="Muon lr (2-D weight matrices)")
 parser.add_argument("--grad_clip",  type=float, default=1.0)
 parser.add_argument("--wandb",      choices=["online", "disabled"], default="online")
+parser.add_argument("--bf16",       action="store_true", help="cast model to bfloat16 (required for ~7B on single GPU)")
 args = parser.parse_args()
 
 model_cfg = {"sanity": Config.sanity, "experiment": Config.experiment, "iphone": Config.iphone, "macbook": Config.macbook}[args.model]()
@@ -84,10 +85,11 @@ def _val_prompts(n: int, prompt_tokens: int) -> list[str]:
 SAMPLE_PROMPTS = _val_prompts(N_SAMPLE_PROMPTS, PROMPT_TOKENS)
 
 # ── model ─────────────────────────────────────────────────────────────────────
-model = GPT(model_cfg).to(device)
+dtype = torch.bfloat16 if args.bf16 else torch.float32
+model = GPT(model_cfg).to(device=device, dtype=dtype)
 if device == "cuda":
     model = torch.compile(model)
-print(f"params: {model.num_params():,}")
+print(f"params: {model.num_params():,}  dtype: {dtype}")
 
 # Muon for 2-D weight matrices inside transformer blocks;
 # AdamW for embeddings, head, and 1-D norm weights.
