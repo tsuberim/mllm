@@ -49,6 +49,10 @@ else:
     device = "cpu"
 print(f"device: {device}")
 torch.set_float32_matmul_precision("high")  # TF32 on Ampere+; no-op elsewhere
+if device == "cuda":
+    torch.backends.cudnn.allow_tf32 = True
+    # expandable_segments avoids OOM from allocator fragmentation on large models
+    os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
 # bf16 autocast helps on CUDA (tensor cores); hurts on MPS (fp32 is native)
 autocast = (torch.autocast(device_type="cuda", dtype=torch.bfloat16)
@@ -65,7 +69,11 @@ def get_batch(tokens, batch_size, block_size):
     ix = torch.randint(len(tokens) - block_size, (batch_size,))
     x = torch.stack([torch.from_numpy(tokens[i  :i+block_size  ].astype(np.int64)) for i in ix])
     y = torch.stack([torch.from_numpy(tokens[i+1:i+block_size+1].astype(np.int64)) for i in ix])
-    return x.to(device, non_blocking=True), y.to(device, non_blocking=True)
+    if device == "cuda":
+        x, y = x.pin_memory().to(device, non_blocking=True), y.pin_memory().to(device, non_blocking=True)
+    else:
+        x, y = x.to(device, non_blocking=True), y.to(device, non_blocking=True)
+    return x, y
 
 train_tokens = load_tokens("data_train.bin")
 val_tokens   = load_tokens("data_validation.bin")
@@ -88,7 +96,9 @@ SAMPLE_PROMPTS = _val_prompts(N_SAMPLE_PROMPTS, PROMPT_TOKENS)
 dtype = torch.bfloat16 if args.bf16 else torch.float32
 model = GPT(model_cfg).to(device=device, dtype=dtype)
 if device == "cuda":
-    model = torch.compile(model)
+    # max-autotune: Triton finds optimal tile sizes for this GPU's SM count/config
+    # one-time cost per model shape, cached in TORCHINDUCTOR_CACHE_DIR
+    model = torch.compile(model, mode="max-autotune")
 print(f"params: {model.num_params():,}  dtype: {dtype}")
 
 # Muon for 2-D weight matrices inside transformer blocks;
