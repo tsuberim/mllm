@@ -13,7 +13,7 @@
 
 set -euo pipefail
 
-apt-get update -qq && apt-get install -y -qq git
+apt-get update -qq && apt-get install -y -qq git curl
 
 REPO_URL="https://${GITHUB_TOKEN}@github.com/tsuberim/merlin.git"
 WORKDIR="/workspace/merlin"
@@ -32,8 +32,8 @@ cd "$WORKDIR"
 if [ ! -f ".deps_installed" ]; then
     echo "→ installing dependencies..."
     pip install --quiet --upgrade pip
-    # mlx is Mac-only — skip it on CUDA
-    grep -v "^mlx" requirements.txt | pip install --quiet -r /dev/stdin
+    # skip mlx (Mac-only), torch (pre-installed in image), pytest (not needed)
+    grep -vE "^(mlx|torch|pytest)" requirements.txt | pip install --quiet -r /dev/stdin
     touch .deps_installed
 else
     echo "→ deps already installed"
