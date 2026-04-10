@@ -19,7 +19,6 @@ import sys
 import tempfile
 
 import torch
-from datasets import load_dataset
 
 N_HUMANEVAL   = 5
 ABORT_AFTER   = 1000   # don't abort on 0% humaneval before this step
@@ -29,6 +28,7 @@ _ds = None  # loaded once via preload()
 
 def preload():
     global _ds
+    from datasets import load_dataset
     _ds = load_dataset("openai/openai_humaneval", split="test", trust_remote_code=True)
     _ds = _ds.select(range(N_HUMANEVAL))
 

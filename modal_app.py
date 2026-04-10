@@ -33,6 +33,7 @@ image = (
         "tokenizers",
         "tqdm",
         "python-dotenv",
+        "datasets",
     )
 )
 
