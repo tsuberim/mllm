@@ -29,7 +29,7 @@ _ds = None  # loaded once via preload()
 def preload():
     global _ds
     from datasets import load_dataset
-    _ds = load_dataset("openai/openai_humaneval", split="test", trust_remote_code=True)
+    _ds = load_dataset("openai/openai_humaneval", split="test")
     _ds = _ds.select(range(N_HUMANEVAL))
 
 
