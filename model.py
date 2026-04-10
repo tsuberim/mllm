@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 @dataclass
 class Config:
-    vocab_size:  int   = 50257   # tiktoken gpt2
+    vocab_size:  int   = 32016   # 32000 BPE + 16 special tokens
     block_size:  int   = 1024
     n_embd:      int   = 768
     n_head:      int   = 12
@@ -81,7 +81,7 @@ class Attention(nn.Module):
         self.register_buffer("rope_cos", cos)
         self.register_buffer("rope_sin", sin)
 
-    def forward(self, x):
+    def forward(self, x, attn_mask=None):
         B, T, C = x.shape
         q  = self.q_proj(x).view(B, T, self.n_head, self.head_dim).transpose(1, 2)
         kv = self.kv_proj(x).view(B, T, 2 * self.n_kv_head, self.head_dim)
@@ -93,7 +93,10 @@ class Attention(nn.Module):
         gqa = self.n_head // self.n_kv_head
         k = k.unsqueeze(2).expand(B, self.n_kv_head, gqa, T, self.head_dim).reshape(B, self.n_head, T, self.head_dim)
         v = v.unsqueeze(2).expand(B, self.n_kv_head, gqa, T, self.head_dim).reshape(B, self.n_head, T, self.head_dim)
-        y = F.scaled_dot_product_attention(q, k, v, is_causal=True)
+        # attn_mask: (B, 1, T, T) bool, True = attend. None → standard causal.
+        # NOTE: custom mask disables FlashAttention kernel; for T > ~1024 use
+        # flash_attn_varlen_func instead (handles packed docs natively).
+        y = F.scaled_dot_product_attention(q, k, v, attn_mask=attn_mask, is_causal=attn_mask is None)
         return self.proj(y.transpose(1, 2).contiguous().view(B, T, C))
 
 
@@ -118,8 +121,8 @@ class Block(nn.Module):
         self.norm2 = RMSNorm(cfg.n_embd)
         self.mlp   = MLP(cfg)
 
-    def forward(self, x):
-        x = x + self.attn(self.norm1(x))
+    def forward(self, x, attn_mask=None):
+        x = x + self.attn(self.norm1(x), attn_mask)
         x = x + self.mlp(self.norm2(x))
         return x
 
@@ -142,11 +145,11 @@ class GPT(nn.Module):
         elif isinstance(m, nn.Embedding):
             nn.init.normal_(m.weight, std=0.02)
 
-    def forward(self, idx, targets=None):
+    def forward(self, idx, targets=None, attn_mask=None):
         B, T = idx.shape
         x = self.tok_emb(idx)
         for block in self.blocks:
-            x = block(x)
+            x = block(x, attn_mask)
         x = self.norm(x)
         if targets is not None:
             # chunked cross-entropy: avoids materialising full [B*T, V] logit tensor

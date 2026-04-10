@@ -6,3 +6,12 @@
 __pycache__/
 .pytest_cache/
 wandb/
+
+# data — large files, not for git
+data/raw/
+data/filtered/
+data/deduped/
+data/tokenized/
+data/tokenizer/
+data/repos/
+checkpoints/

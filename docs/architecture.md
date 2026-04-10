@@ -11,7 +11,7 @@ GPT-style decoder-only transformer. Design choices favour inference efficiency o
 | iphone | ~3.17B | 3072 | 24 | 8 | 20 | 4096 | iPhone target |
 | macbook | ~7.19B | 4096 | 32 | 8 | 26 | 4096 | MacBook target |
 
-Param counts are dominated by the vocabulary embedding (50257 × n_embd).
+Param counts are dominated by the vocabulary embedding (32016 × n_embd). Weight tying means tok_emb and head share the same tensor — counted once.
 
 ## Key Choices
 

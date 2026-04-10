@@ -5,5 +5,10 @@ torch
 wandb
 tqdm
 python-dotenv
+modal
+openai
 mlx
 pytest
+mlx-lm
+datasketch
+tokenizers
