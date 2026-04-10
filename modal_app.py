@@ -61,6 +61,7 @@ def train(
     val_steps: int = 10,
     save_every: int = 1000,
     bf16: bool = True,
+    grad_checkpoint: bool = False,
     resume: bool = False,
     tag: str = "",
 ) -> dict:
@@ -87,6 +88,8 @@ def train(
     ]
     if bf16:
         cmd.append("--bf16")
+    if grad_checkpoint:
+        cmd.append("--grad_checkpoint")
     if resume:
         cmd.append("--resume")
     cmd += ["--tag", tag or commit[:12]]
@@ -164,6 +167,7 @@ def main(
     val_steps: int = 5,
     save_every: int = 500,
     bf16: bool = True,
+    grad_checkpoint: bool = False,
     resume: bool = False,
     tag: str = "",
 ):
@@ -190,6 +194,7 @@ def main(
         val_steps=val_steps,
         save_every=save_every,
         bf16=bf16,
+        grad_checkpoint=grad_checkpoint,
         resume=resume,
         tag=tag,
     )

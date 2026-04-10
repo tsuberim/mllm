@@ -130,7 +130,8 @@ class Block(nn.Module):
 class GPT(nn.Module):
     def __init__(self, cfg: Config):
         super().__init__()
-        self.cfg     = cfg
+        self.cfg             = cfg
+        self.grad_checkpoint = False
         self.tok_emb = nn.Embedding(cfg.vocab_size, cfg.n_embd)
         self.blocks  = nn.ModuleList([Block(cfg) for _ in range(cfg.n_layer)])
         self.norm    = RMSNorm(cfg.n_embd)
@@ -146,10 +147,14 @@ class GPT(nn.Module):
             nn.init.normal_(m.weight, std=0.02)
 
     def forward(self, idx, targets=None, attn_mask=None):
+        from torch.utils.checkpoint import checkpoint
         B, T = idx.shape
         x = self.tok_emb(idx)
         for block in self.blocks:
-            x = block(x, attn_mask)
+            if self.grad_checkpoint and self.training:
+                x = checkpoint(block, x, attn_mask, use_reentrant=False)
+            else:
+                x = block(x, attn_mask)
         x = self.norm(x)
         if targets is not None:
             # chunked cross-entropy: avoids materialising full [B*T, V] logit tensor

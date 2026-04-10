@@ -31,7 +31,8 @@ parser.add_argument("--lr",         type=float, default=3e-4,  help="AdamW lr (e
 parser.add_argument("--lr_muon",    type=float, default=0.02,  help="Muon lr (2-D weight matrices)")
 parser.add_argument("--grad_clip",  type=float, default=1.0)
 parser.add_argument("--wandb",      choices=["online", "disabled"], default="online")
-parser.add_argument("--bf16",       action="store_true", help="cast model to bfloat16 (required for ~7B on single GPU)")
+parser.add_argument("--bf16",             action="store_true", help="cast model to bfloat16 (required for ~7B on single GPU)")
+parser.add_argument("--grad_checkpoint",  action="store_true", help="gradient checkpointing (saves activation memory; enables large batches on big models)")
 parser.add_argument("--resume",       action="store_true", help="resume from existing checkpoint")
 parser.add_argument("--tag",          type=str, default=None, help="tag for HF checkpoint filename (default: model name)")
 args = parser.parse_args()
@@ -127,9 +128,11 @@ _samples_table = wandb.Table(columns=["step", "prompt", "completion", "sample"])
 # ── model ─────────────────────────────────────────────────────────────────────
 dtype = torch.bfloat16 if args.bf16 else torch.float32
 model = GPT(model_cfg).to(device=device, dtype=dtype)
+if args.grad_checkpoint:
+    model.grad_checkpoint = True
 if device == "cuda":
     model = torch.compile(model)
-print(f"params: {model.num_params():,}  dtype: {dtype}")
+print(f"params: {model.num_params():,}  dtype: {dtype}  grad_checkpoint: {args.grad_checkpoint}")
 
 # Muon for 2-D weight matrices inside transformer blocks;
 # AdamW for embeddings, head, and 1-D norm weights.
