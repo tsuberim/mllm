@@ -189,6 +189,8 @@ def save_checkpoint(step):
     with open(CKPT_NAME, "wb") as f:
         f.write(buf.getbuffer())
     if hf:
+        from huggingface_hub import create_repo
+        create_repo(HF_REPO, repo_type="model", exist_ok=True)
         buf.seek(0)
         hf.upload_file(path_or_fileobj=buf, path_in_repo=CKPT_NAME,
                        repo_id=HF_REPO, repo_type="model")
