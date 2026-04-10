@@ -1,7 +1,7 @@
 import sys
 import mlx.core as mx
 import mlx.nn as nn
-import tiktoken
+import tok as _tok
 from dataclasses import dataclass
 
 
@@ -145,7 +145,7 @@ class KVCache:
 
 @dataclass
 class Config:
-    vocab_size: int   = 50257
+    vocab_size: int   = 32000
     block_size: int   = 1024
     n_embd:     int   = 768
     n_head:     int   = 12
@@ -243,9 +243,10 @@ class GPT(nn.Module):
         self.norm    = RMSNorm(cfg.n_embd)
         self.head    = nn.Linear(cfg.n_embd, cfg.vocab_size, bias=False)
 
-    def make_cache(self) -> list[KVCache]:
+    def make_cache(self, max_T: int | None = None) -> list[KVCache]:
         dtype = self.tok_emb.weight.dtype
-        return [KVCache(b.attn.n_kv_head, b.attn.head_dim, self.cfg.block_size, dtype=dtype)
+        T = max_T if max_T is not None else self.cfg.block_size
+        return [KVCache(b.attn.n_kv_head, b.attn.head_dim, T, dtype=dtype)
                 for b in self.blocks]
 
     def __call__(self, idx: mx.array, cache: list[KVCache] | None = None):
@@ -311,7 +312,7 @@ if __name__ == "__main__":
     temperature    = args.temp
 
     cfg = {"sanity": Config.sanity, "experiment": Config.experiment, "iphone": Config.iphone, "macbook": Config.macbook}[args.model]()
-    enc = tiktoken.get_encoding("gpt2")
+    enc = _tok.load()
 
     print(f"loading {weights_path}...")
     model = load_model(weights_path, cfg, bits=args.bits)

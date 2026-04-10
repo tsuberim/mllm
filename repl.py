@@ -79,7 +79,8 @@ def _sample(logits: mx.array, temperature: float) -> mx.array:
 
 def stream_generate(model: GPT, idx: mx.array, max_new: int, temperature: float):
     """Yield tokens one at a time for streaming output."""
-    cache = model.make_cache()
+    # allocate only what we need: avoids 1.7GB KV for block_size=4096 on a 7B model
+    cache = model.make_cache(max_T=idx.shape[1] + max_new)
     logits, cache = model(idx, cache)
     next_tok = _sample(logits[:, -1, :], temperature)
     mx.eval(next_tok, *[c.k for c in cache], *[c.v for c in cache])
@@ -178,8 +179,11 @@ if __name__ == "__main__":
     if args.random:
         from mlx.nn import quantize
         model = GPT(cfg)
+        # cast before mx.eval so we never materialize the full fp32 blob
+        dtype = {16: mx.float16, 0: mx.float32}.get(args.bits, mx.float32)
+        if dtype != mx.float32:
+            model.load_weights([(k, v.astype(dtype)) for k, v in tree_flatten(model.parameters())])
         mx.eval(model.parameters())
-        nparams = sum(v.size for _, v in tree_flatten(model.parameters()))
         if args.bits in (4, 8):
             quantize(model, group_size=64, bits=args.bits)
         for block in model.blocks:
@@ -194,6 +198,18 @@ if __name__ == "__main__":
         model = load_model(weights_path, cfg, bits=args.bits)
     else:
         parser.error("provide --tag <commit>, --weights <path>, or --random")
+
+    nparams = sum(v.size for _, v in tree_flatten(model.parameters()))
     print(f"model: {args.model}  params: {nparams:,}")
+
+    # warmup: compile decode graph (T=1) before user starts typing;
+    # first-pass Metal shader compilation for a 7B model takes 30-120s
+    print("warming up...", end="", flush=True)
+    _w = mx.zeros((1, 1), dtype=mx.uint32)
+    _wc = model.make_cache(max_T=args.max_new + 1)
+    model(_w, _wc)
+    mx.eval(model.parameters())
+    del _w, _wc
+    print(" done")
 
     run_repl(model, enc, args.max_new, args.temperature)
