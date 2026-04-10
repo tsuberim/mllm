@@ -146,7 +146,7 @@ def generate(prompt: str, max_new: int = SAMPLE_NEW, temperature: float = 0.8) -
             next_tok = torch.multinomial(
                 torch.softmax(logits[:, -1, :] / temperature, dim=-1), 1)
             idx = torch.cat([idx, next_tok], dim=1)
-    return enc.decode(idx[0].tolist())
+    return enc.decode(idx[0].tolist()[len(tokens):])
 
 # ── checkpoint ────────────────────────────────────────────────────────────────
 hf = HfApi() if args.wandb == "online" else None
@@ -198,7 +198,9 @@ EVAL_EVERY = args.eval_every if args.eval_every is not None else args.save_every
 
 # ── wandb ─────────────────────────────────────────────────────────────────────
 wandb.init(
-    project="merlin", name=_tag, id=_tag, resume="allow", mode=args.wandb,
+    project="merlin", name=_tag, id=_tag,
+    resume="must" if args.resume else "never",
+    mode=args.wandb,
     config={**model_cfg.__dict__, "batch_size": args.batch_size,
             "lr": args.lr, "lr_muon": args.lr_muon,
             "max_steps": args.max_steps, "device": device},
