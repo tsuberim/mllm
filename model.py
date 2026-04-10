@@ -21,8 +21,8 @@ class Config:
 
     @classmethod
     def experiment(cls):
-        """~60M params — H100 experiment runs. head_dim=64, block_size=512."""
-        return cls(n_embd=512, n_head=8, n_kv_head=2, n_layer=12, block_size=512)
+        """~16M params — cheap experiment runs. head_dim=32, block_size=512."""
+        return cls(n_embd=256, n_head=8, n_kv_head=2, n_layer=8, block_size=512)
 
 
     @classmethod
