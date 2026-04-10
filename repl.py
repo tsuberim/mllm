@@ -16,6 +16,7 @@ from pathlib import Path
 
 import mlx.core as mx
 import numpy as np
+from mlx.utils import tree_flatten
 
 import tok as _tok
 from infer import Config, GPT, load_model
@@ -193,9 +194,6 @@ if __name__ == "__main__":
         model = load_model(weights_path, cfg, bits=args.bits)
     else:
         parser.error("provide --tag <commit>, --weights <path>, or --random")
-    from mlx.utils import tree_flatten
-    if not args.random:
-        nparams = sum(v.size for _, v in tree_flatten(model.parameters()))
     print(f"model: {args.model}  params: {nparams:,}")
 
     run_repl(model, enc, args.max_new, args.temperature)
