@@ -113,9 +113,10 @@ def run_repl(model: GPT, enc, max_new: int, temperature: float):
         context += user + "\n"
         prompt_ids = enc.encode(context)
 
-        # trim to context window
-        if len(prompt_ids) > model.cfg.block_size:
-            prompt_ids = prompt_ids[-model.cfg.block_size:]
+        # trim to leave room for generated tokens
+        max_prompt = model.cfg.block_size - max_new
+        if len(prompt_ids) > max_prompt:
+            prompt_ids = prompt_ids[-max_prompt:]
 
         idx = mx.array([prompt_ids])
         print("<<< ", end="", flush=True)
