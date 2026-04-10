@@ -1,0 +1,18 @@
+{
+  "model": "mlx-community/Qwen2.5-Coder-3B-Instruct-4bit",
+  "max_context_tokens": 9500,
+  "model_memory_mb": 1805.3,
+  "results": [
+    {
+      "task": "sem_missing_error_handling",
+      "category": "semantic_search",
+      "parallelizable": true,
+      "success": false,
+      "tokens_used": 702,
+      "tps": 40.6,
+      "turns": 2,
+      "context_headroom": 8798,
+      "error": null
+    }
+  ]
+}

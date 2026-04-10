@@ -1,0 +1,139 @@
+{
+  "model": "mlx-community/Qwen2.5-Coder-3B-Instruct-4bit",
+  "max_context_tokens": 9500,
+  "model_memory_mb": 1794.1,
+  "results": [
+    {
+      "task": "count_imports",
+      "category": "search",
+      "parallelizable": true,
+      "success": false,
+      "tokens_used": 305,
+      "tps": 10.6,
+      "turns": 2,
+      "context_headroom": 9195,
+      "error": null
+    },
+    {
+      "task": "total_line_count",
+      "category": "analysis",
+      "parallelizable": true,
+      "success": true,
+      "tokens_used": 297,
+      "tps": 14.9,
+      "turns": 2,
+      "context_headroom": 9203,
+      "error": null
+    },
+    {
+      "task": "script_sum_numbers",
+      "category": "scripting",
+      "parallelizable": true,
+      "success": true,
+      "tokens_used": 370,
+      "tps": 16.3,
+      "turns": 2,
+      "context_headroom": 9130,
+      "error": null
+    },
+    {
+      "task": "most_todos_file",
+      "category": "multi_step",
+      "parallelizable": false,
+      "success": true,
+      "tokens_used": 504,
+      "tps": 18.7,
+      "turns": 2,
+      "context_headroom": 8996,
+      "error": null
+    },
+    {
+      "task": "tree_list_functions",
+      "category": "tree_leaf",
+      "parallelizable": true,
+      "success": true,
+      "tokens_used": 722,
+      "tps": 12.8,
+      "turns": 4,
+      "context_headroom": 8778,
+      "error": null
+    },
+    {
+      "task": "sem_missing_error_handling",
+      "category": "semantic_search",
+      "parallelizable": true,
+      "success": false,
+      "tokens_used": 704,
+      "tps": 17.7,
+      "turns": 1,
+      "context_headroom": 8796,
+      "error": null
+    },
+    {
+      "task": "sem_dead_code",
+      "category": "semantic_search",
+      "parallelizable": true,
+      "success": false,
+      "tokens_used": 700,
+      "tps": 17.3,
+      "turns": 1,
+      "context_headroom": 8800,
+      "error": null
+    },
+    {
+      "task": "iter_regex_refine",
+      "category": "iterative",
+      "parallelizable": false,
+      "success": true,
+      "tokens_used": 5643,
+      "tps": 11.5,
+      "turns": 10,
+      "context_headroom": 3857,
+      "error": null
+    },
+    {
+      "task": "pipeline_csv_aggregate",
+      "category": "pipeline",
+      "parallelizable": false,
+      "success": true,
+      "tokens_used": 2809,
+      "tps": 11.8,
+      "turns": 10,
+      "context_headroom": 6691,
+      "error": null
+    },
+    {
+      "task": "parallel_list_functions_cache",
+      "category": "parallel",
+      "parallelizable": true,
+      "success": false,
+      "tokens_used": 1897,
+      "tps": 11.9,
+      "turns": 10,
+      "context_headroom": 7603,
+      "error": null
+    },
+    {
+      "task": "parallel_list_functions_storage",
+      "category": "parallel",
+      "parallelizable": true,
+      "success": false,
+      "tokens_used": 1945,
+      "tps": 11.6,
+      "turns": 10,
+      "context_headroom": 7555,
+      "error": null
+    },
+    {
+      "task": "dataset_normalize",
+      "category": "pipeline",
+      "parallelizable": true,
+      "success": false,
+      "tokens_used": 3317,
+      "tps": 15.6,
+      "turns": 10,
+      "context_headroom": 6183,
+      "error": null
+    }
+  ]
+}

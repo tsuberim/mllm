@@ -1,0 +1,18 @@
+{
+  "model": "mlx-community/Qwen2.5-Coder-3B-Instruct-4bit",
+  "max_context_tokens": 9500,
+  "model_memory_mb": 1799.8,
+  "results": [
+    {
+      "task": "pipeline_build_index",
+      "category": "pipeline",
+      "parallelizable": false,
+      "success": false,
+      "tokens_used": 4618,
+      "tps": 34.8,
+      "turns": 10,
+      "context_headroom": 4882,
+      "error": "validate error: Extra data: line 2 column 1 (char 3)"
+    }
+  ]
+}

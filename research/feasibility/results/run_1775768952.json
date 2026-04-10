@@ -1,0 +1,18 @@
+{
+  "model": "mlx-community/Qwen2.5-Coder-3B-Instruct-4bit",
+  "max_context_tokens": 9500,
+  "model_memory_mb": 1809.2,
+  "results": [
+    {
+      "task": "find_py_files",
+      "category": "search",
+      "parallelizable": true,
+      "success": false,
+      "tokens_used": 4594,
+      "tps": 37.1,
+      "turns": 10,
+      "context_headroom": 4906,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "model": "mlx-community/Qwen2.5-Coder-3B-Instruct-4bit",
+  "max_context_tokens": 9500,
+  "model_memory_mb": 481.3,
+  "results": [
+    {
+      "task": "script_sum_numbers",
+      "category": "scripting",
+      "parallelizable": true,
+      "success": false,
+      "tokens_used": 190,
+      "tps": 17.1,
+      "turns": 2,
+      "context_headroom": 9310,
+      "error": null
+    }
+  ]
+}
