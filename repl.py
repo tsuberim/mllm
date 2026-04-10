@@ -175,7 +175,8 @@ if __name__ == "__main__":
 
     print(f"loading {weights_path} ...")
     model = load_model(weights_path, cfg, bits=args.bits)
-    nparams = sum(v.size for _, v in mx.utils.tree_flatten(model.parameters()))
+    from mlx.utils import tree_flatten
+    nparams = sum(v.size for _, v in tree_flatten(model.parameters()))
     print(f"model: {args.model}  params: {nparams:,}")
 
     run_repl(model, enc, args.max_new, args.temperature)
