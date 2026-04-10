@@ -26,7 +26,7 @@ app = modal.App("merlin")
 # mlx / mlx-lm are Apple-only, skip them.
 image = (
     modal.Image.from_registry("pytorch/pytorch:2.7.0-cuda12.8-cudnn9-runtime")
-    .apt_install("git")
+    .apt_install("git", "gcc")
     .pip_install(
         "wandb",
         "huggingface_hub",
