@@ -37,21 +37,18 @@ image = (
     )
 )
 
-# Persistent volume holding corpus_train.bin + corpus_val.bin
-corpus_vol = modal.Volume.from_name("merlin-corpus", create_if_missing=True)
+# Single persistent volume: corpus/ cache/hf cache/inductor
+vol = modal.Volume.from_name("merlin-data", create_if_missing=True)
 
-# Persistent cache: HuggingFace downloads (tokenizer, datasets) + torch.compile artifacts
-cache_vol = modal.Volume.from_name("merlin-cache", create_if_missing=True)
-
-CACHE_DIR     = "/data/cache"
-HF_HOME       = f"{CACHE_DIR}/hf"
-INDUCTOR_CACHE = f"{CACHE_DIR}/inductor"
+DATA_ROOT      = "/data"
+HF_HOME        = f"{DATA_ROOT}/cache/hf"
+INDUCTOR_CACHE = f"{DATA_ROOT}/cache/inductor"
 
 
 @app.function(
     image=image,
     gpu="H100",
-    volumes={"/data/tokenized": corpus_vol, CACHE_DIR: cache_vol},
+    volumes={DATA_ROOT: vol},
     timeout=60 * 60 * 12,  # 12h max
     secrets=[modal.Secret.from_name("merlin")],
 )
@@ -108,8 +105,8 @@ def train(
         cwd=repo_dir,
         env={
             **os.environ,
-            "DATA_DIR":               "/data/tokenized",
-            "HF_HOME":                HF_HOME,
+            "DATA_DIR":                f"{DATA_ROOT}/tokenized",
+            "HF_HOME":                 HF_HOME,
             "TORCHINDUCTOR_CACHE_DIR": INDUCTOR_CACHE,
         },
     )
@@ -129,7 +126,7 @@ def train(
 
 @app.function(
     image=image,
-    volumes={"/data/tokenized": corpus_vol},
+    volumes={DATA_ROOT: vol},
     timeout=60 * 60,
 )
 def upload_corpus():
@@ -137,7 +134,8 @@ def upload_corpus():
     from huggingface_hub import hf_hub_download
     import shutil
 
-    os.makedirs("/data/tokenized", exist_ok=True)
+    tokenized_dir = f"{DATA_ROOT}/tokenized"
+    os.makedirs(tokenized_dir, exist_ok=True)
     for fname in ["corpus_train.bin", "corpus_val.bin"]:
         print(f"Downloading {fname} from HF ...")
         path = hf_hub_download(
@@ -146,12 +144,12 @@ def upload_corpus():
             repo_type="dataset",
             token=os.environ.get("HF_TOKEN"),
         )
-        dst = f"/data/tokenized/{fname}"
+        dst = f"{tokenized_dir}/{fname}"
         shutil.copy(path, dst)
         size_gb = os.path.getsize(dst) / 1e9
         print(f"  {fname}: {size_gb:.2f} GB")
 
-    corpus_vol.commit()
+    vol.commit()
     print("Done. Corpus committed to volume.")
 
 
