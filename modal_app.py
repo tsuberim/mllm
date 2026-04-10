@@ -55,12 +55,12 @@ INDUCTOR_CACHE = f"{DATA_ROOT}/cache/inductor"
 def train(
     commit: str,
     model: str = "experiment",
-    batch_size: int = 256,
+    batch_size: int = 512,
     max_steps: int = 20000,
     val_every: int = 500,
     val_steps: int = 10,
     save_every: int = 1000,
-    bf16: bool = False,
+    bf16: bool = True,
     resume: bool = False,
     tag: str = "",
 ) -> dict:
@@ -157,12 +157,12 @@ def upload_corpus():
 def main(
     commit: str = "",
     model: str = "experiment",
-    batch_size: int = 256,
+    batch_size: int = 512,
     max_steps: int = 20000,
     val_every: int = 500,
     val_steps: int = 10,
     save_every: int = 1000,
-    bf16: bool = False,
+    bf16: bool = True,
     resume: bool = False,
     tag: str = "",
 ):
