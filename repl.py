@@ -162,6 +162,7 @@ if __name__ == "__main__":
     parser.add_argument("--max_new",     type=int,   default=256)
     parser.add_argument("--temperature", type=float, default=0.8)
     parser.add_argument("--bits",        type=int,   default=0, choices=[0, 4, 8, 16])
+    parser.add_argument("--random",      action="store_true", help="use random weights (for benchmarking)")
     args = parser.parse_args()
 
     from dotenv import load_dotenv
@@ -171,17 +172,26 @@ if __name__ == "__main__":
            "iphone": Config.iphone, "macbook": Config.macbook}[args.model]()
     cfg.vocab_size = 32016  # our tokenizer
 
-    if args.weights:
-        weights_path = args.weights
-    elif args.tag:
-        weights_path = str(resolve_weights(args.tag, args.model))
-    else:
-        parser.error("provide --tag <commit> or --weights <path>")
-
     enc = _tok.load()
 
-    print(f"loading {weights_path} ...")
-    model = load_model(weights_path, cfg, bits=args.bits)
+    if args.random:
+        from mlx.nn import quantize
+        model = GPT(cfg)
+        mx.eval(model.parameters())
+        if args.bits in (4, 8):
+            quantize(model, group_size=64, bits=args.bits)
+        for block in model.blocks:
+            block.mlp = mx.compile(block.mlp)
+        print("using random weights")
+    elif args.weights:
+        print(f"loading {args.weights} ...")
+        model = load_model(args.weights, cfg, bits=args.bits)
+    elif args.tag:
+        weights_path = str(resolve_weights(args.tag, args.model))
+        print(f"loading {weights_path} ...")
+        model = load_model(weights_path, cfg, bits=args.bits)
+    else:
+        parser.error("provide --tag <commit>, --weights <path>, or --random")
     from mlx.utils import tree_flatten
     nparams = sum(v.size for _, v in tree_flatten(model.parameters()))
     print(f"model: {args.model}  params: {nparams:,}")
