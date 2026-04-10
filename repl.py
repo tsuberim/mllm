@@ -70,17 +70,23 @@ def resolve_weights(tag: str, model: str) -> Path:
 
 # ── generation ────────────────────────────────────────────────────────────────
 
+def _sample(logits: mx.array, temperature: float) -> mx.array:
+    if temperature == 0:
+        return mx.argmax(logits, axis=-1, keepdims=True)
+    return mx.random.categorical(logits / temperature)[..., None]
+
+
 def stream_generate(model: GPT, idx: mx.array, max_new: int, temperature: float):
     """Yield tokens one at a time for streaming output."""
     cache = model.make_cache()
     logits, cache = model(idx, cache)
-    next_tok = mx.argmax(logits[:, -1, :] / temperature, axis=-1, keepdims=True)
+    next_tok = _sample(logits[:, -1, :], temperature)
     mx.eval(next_tok, *[c.k for c in cache], *[c.v for c in cache])
     yield next_tok[0, 0].item()
 
     for _ in range(max_new - 1):
         logits, cache = model(next_tok, cache)
-        next_tok = mx.argmax(logits[:, -1, :] / temperature, axis=-1, keepdims=True)
+        next_tok = _sample(logits[:, -1, :], temperature)
         mx.eval(next_tok)
         yield next_tok[0, 0].item()
 
