@@ -119,18 +119,26 @@ def run_repl(model: GPT, enc, max_new: int, temperature: float):
         print("<<< ", end="", flush=True)
 
         completion_ids = []
+        eos = enc.token_to_id("<|eos|>")
+        t0 = None
         try:
             for tok_id in stream_generate(model, idx, max_new, temperature):
+                if t0 is None:
+                    t0 = __import__("time").perf_counter()  # start after prefill
                 token_str = enc.decode([tok_id])
                 print(token_str, end="", flush=True)
                 completion_ids.append(tok_id)
-                eos = enc.token_to_id("<|eos|>")
                 if eos is not None and tok_id == eos:
                     break
         except KeyboardInterrupt:
             pass
 
-        print()
+        elapsed = __import__("time").perf_counter() - (t0 or __import__("time").perf_counter())
+        n_new   = max(len(completion_ids) - 1, 1)  # exclude prefill token
+        tps     = n_new / elapsed if elapsed > 0 else 0
+        mem_mb  = mx.metal.get_active_memory() / 1e6
+
+        print(f"\n\033[2m[{n_new} tokens  {tps:.1f} t/s  {mem_mb:.0f} MB]\033[0m")
         context += enc.decode(completion_ids) + "\n"
 
 
