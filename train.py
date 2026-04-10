@@ -221,7 +221,7 @@ EVAL_EVERY = args.eval_every if args.eval_every is not None else args.save_every
 
 # ── wandb ─────────────────────────────────────────────────────────────────────
 wandb.init(
-    project="merlin", resume="allow", mode=args.wandb,
+    project="merlin", name=_tag, id=_tag, resume="allow", mode=args.wandb,
     config={**model_cfg.__dict__, "batch_size": args.batch_size,
             "lr": args.lr, "lr_muon": args.lr_muon,
             "max_steps": args.max_steps, "device": device},
