@@ -70,8 +70,23 @@ enc = tok.load()
 DATA_DIR = Path(os.environ.get("DATA_DIR", "data/tokenized"))
 _train_path = DATA_DIR / "corpus_train.bin"
 _val_path   = DATA_DIR / "corpus_val.bin"
-assert _train_path.exists(), f"corpus_train.bin not found in {DATA_DIR}"
-assert _val_path.exists(),   f"corpus_val.bin not found in {DATA_DIR}"
+
+def _ensure_corpus():
+    if _train_path.exists() and _val_path.exists():
+        return
+    from huggingface_hub import hf_hub_download
+    import shutil
+    HF_CORPUS = "tsuberim/merlin-corpus-v0"
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    for fname, path in [("corpus_train.bin", _train_path), ("corpus_val.bin", _val_path)]:
+        if not path.exists():
+            print(f"[data] downloading {fname} from {HF_CORPUS} ...")
+            src = hf_hub_download(HF_CORPUS, f"data/{fname}", repo_type="dataset",
+                                  token=os.environ.get("HF_TOKEN"))
+            shutil.copy(src, path)
+            print(f"[data] {fname} ready ({path.stat().st_size / 1e9:.2f} GB)")
+
+_ensure_corpus()
 
 # Load pre-shuffled, pre-split corpus — fits in H100 HBM (~2.4GB total)
 # Chunks are doc-boundary aligned: no document spans a chunk boundary; gaps filled with EOS.
