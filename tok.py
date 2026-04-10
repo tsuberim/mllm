@@ -3,11 +3,27 @@ from pathlib import Path
 from tokenizers import Tokenizer as _Tokenizer
 
 TOKENIZER_PATH = Path(__file__).parent / "data" / "tokenizer" / "tokenizer.json"
+HF_TOKENIZER_REPO = "tsuberim/merlin-tokenizer-v0"
+
+
+def _resolve_path(path: Path) -> Path:
+    """Return path if it exists, otherwise download from HuggingFace."""
+    if path.exists():
+        return path
+    from huggingface_hub import hf_hub_download
+    import os
+    print(f"[tok] tokenizer not found locally, downloading from {HF_TOKENIZER_REPO} ...")
+    downloaded = hf_hub_download(
+        repo_id=HF_TOKENIZER_REPO,
+        filename="tokenizer.json",
+        token=os.environ.get("HF_TOKEN"),
+    )
+    return Path(downloaded)
 
 
 class Tokenizer:
     def __init__(self, path: str | Path = TOKENIZER_PATH):
-        self._tok = _Tokenizer.from_file(str(path))
+        self._tok = _Tokenizer.from_file(str(_resolve_path(Path(path))))
 
     @property
     def vocab_size(self) -> int:
