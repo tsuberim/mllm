@@ -35,6 +35,8 @@ def _convert(pt_path: Path, out_path: Path):
     arrays = {}
     for k, v in sd.items():
         k = k.removeprefix("_orig_mod.")
+        if "rope_cos" in k or "rope_sin" in k:
+            continue
         arrays[k] = v.float().numpy()
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
