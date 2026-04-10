@@ -162,7 +162,7 @@ if __name__ == "__main__":
     parser.add_argument("--weights",     default=None, help="path to pre-converted .npz")
     parser.add_argument("--max_new",     type=int,   default=256)
     parser.add_argument("--temperature", type=float, default=0.8)
-    parser.add_argument("--bits",        type=int,   default=0, choices=[0, 4, 8, 16])
+    parser.add_argument("--bits",        type=int,   default=16, choices=[0, 4, 8, 16])
     parser.add_argument("--random",      action="store_true", help="use random weights (for benchmarking)")
     args = parser.parse_args()
 
