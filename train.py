@@ -107,6 +107,7 @@ def _val_prompts(n: int, prompt_tokens: int, continuation_tokens: int) -> list[t
     return prompts
 
 SAMPLE_PROMPTS = _val_prompts(N_SAMPLE_PROMPTS, PROMPT_TOKENS, SAMPLE_NEW)
+_samples_table = wandb.Table(columns=["step", "prompt", "completion", "sample"])
 
 # ── model ─────────────────────────────────────────────────────────────────────
 dtype = torch.bfloat16 if args.bf16 else torch.float32
@@ -233,12 +234,11 @@ for step in pbar:
                 for _ in range(args.val_steps)
             ) / args.val_steps
 
-        samples = wandb.Table(columns=["prompt", "completion", "sample"])
         for prompt, ground_truth in SAMPLE_PROMPTS:
-            samples.add_data(prompt, prompt + generate(prompt), prompt + ground_truth)
+            _samples_table.add_data(step, prompt, prompt + generate(prompt), prompt + ground_truth)
 
         log["val/loss"] = val_loss
-        log["samples"]  = samples
+        log["samples"]  = _samples_table
         pbar.set_postfix(loss=f"{loss.item():.4f}", val=f"{val_loss:.4f}",
                          gnorm=f"{grad_norm:.2f}")
     else:
