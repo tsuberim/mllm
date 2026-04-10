@@ -57,6 +57,7 @@ def train(
     val_steps: int = 10,
     save_every: int = 1000,
     bf16: bool = False,
+    from_scratch: bool = True,
 ) -> dict:
     # Clone repo at exact commit — only overhead on H100 (~5s)
     repo_dir = f"/tmp/{commit}"
@@ -81,6 +82,8 @@ def train(
     ]
     if bf16:
         cmd.append("--bf16")
+    if from_scratch:
+        cmd.append("--from_scratch")
 
     print(f"[train] {' '.join(cmd)}")
 
@@ -148,6 +151,7 @@ def main(
     val_steps: int = 10,
     save_every: int = 1000,
     bf16: bool = False,
+    from_scratch: bool = True,
 ):
     if not commit:
         commit = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
@@ -172,5 +176,6 @@ def main(
         val_steps=val_steps,
         save_every=save_every,
         bf16=bf16,
+        from_scratch=from_scratch,
     )
     print(f"\nW&B: {result['wandb_url']}")

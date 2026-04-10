@@ -32,6 +32,7 @@ parser.add_argument("--lr_muon",    type=float, default=0.02,  help="Muon lr (2-
 parser.add_argument("--grad_clip",  type=float, default=1.0)
 parser.add_argument("--wandb",      choices=["online", "disabled"], default="online")
 parser.add_argument("--bf16",       action="store_true", help="cast model to bfloat16 (required for ~7B on single GPU)")
+parser.add_argument("--from_scratch", action="store_true", help="ignore existing checkpoint and train from step 0")
 args = parser.parse_args()
 
 model_cfg = {"sanity": Config.sanity, "experiment": Config.experiment, "iphone": Config.iphone, "macbook": Config.macbook}[args.model]()
@@ -70,12 +71,11 @@ _val_path   = DATA_DIR / "corpus_val.bin"
 assert _train_path.exists(), f"corpus_train.bin not found in {DATA_DIR}"
 assert _val_path.exists(),   f"corpus_val.bin not found in {DATA_DIR}"
 
-# Load pre-shuffled, pre-split corpus as flat streams — fits in H100 HBM (~2.4GB total)
-# Stride < SEQ_LEN gives overlapping windows so document tails get proper context.
+# Load pre-shuffled, pre-split corpus — fits in H100 HBM (~2.4GB total)
+# Chunks are doc-boundary aligned: no document spans a chunk boundary; gaps filled with EOS.
 _seq_len = 6144
-_stride  = 5632  # 512-token overlap; ~9% repetition, eliminates context-free chunk starts
-train_data = np.fromfile(_train_path, dtype=np.uint16)
-val_data   = np.fromfile(_val_path,   dtype=np.uint16)
+train_data = np.fromfile(_train_path, dtype=np.uint16).reshape(-1, _seq_len)
+val_data   = np.fromfile(_val_path,   dtype=np.uint16).reshape(-1, _seq_len)
 
 _eos_id = enc.token_to_id("<|eos|>")
 
@@ -99,13 +99,9 @@ def _doc_mask(x: torch.Tensor) -> torch.Tensor:
     return (same_doc & causal).unsqueeze(1)                         # (B, 1, T, T)
 
 def get_batch(data, batch_size, block_size):
-    """Sample batch_size overlapping windows with stride, return (x, y, attn_mask)."""
-    n_windows = (len(data) - block_size - 1) // _stride
-    ix = torch.randint(n_windows, (batch_size,)) * _stride
-    chunks = torch.stack([
-        torch.from_numpy(data[i:i + block_size + 1].astype(np.int64))
-        for i in ix.tolist()
-    ])                                                               # (B, block_size+1)
+    """Sample batch_size chunks, slice to block_size, return (x, y, attn_mask)."""
+    ix = torch.randint(len(data), (batch_size,))
+    chunks = torch.from_numpy(data[ix.numpy()].astype(np.int64))   # (B, _seq_len)
     x = chunks[:, :block_size]
     y = chunks[:, 1:block_size + 1]
     mask = _doc_mask(x)
@@ -216,7 +212,8 @@ def load_checkpoint():
         start_step = ckpt["step"] + 1
         print(f"resumed from step {start_step}")
 
-load_checkpoint()
+if not args.from_scratch:
+    load_checkpoint()
 eval_ckpt.preload()
 EVAL_EVERY = args.eval_every if args.eval_every is not None else args.save_every
 
