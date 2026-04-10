@@ -79,41 +79,17 @@ _seq_len = 6144
 train_data = np.fromfile(_train_path, dtype=np.uint16).reshape(-1, _seq_len)
 val_data   = np.fromfile(_val_path,   dtype=np.uint16).reshape(-1, _seq_len)
 
-_eos_id = enc.token_to_id("<|eos|>")
-
-def _doc_mask(x: torch.Tensor) -> torch.Tensor:
-    """Block-diagonal causal mask: prevents attention across document boundaries.
-    x: (B, T) — input token ids (on CPU or CUDA)
-    returns: (B, 1, T, T) bool mask, True = allowed to attend
-
-    NOTE: disables FlashAttention kernel in SDPA. For T > ~1024 switch to
-    flash_attn_varlen_func which handles packed docs natively via cu_seqlens.
-    """
-    B, T = x.shape
-    # doc_id[b, t] = number of EOS tokens seen before position t
-    is_eos = (x == _eos_id)
-    doc_id = torch.cat([
-        torch.zeros(B, 1, dtype=torch.long, device=x.device),
-        is_eos[:, :-1].long().cumsum(dim=1),
-    ], dim=1)  # (B, T)
-    same_doc = doc_id.unsqueeze(2) == doc_id.unsqueeze(1)          # (B, T, T)
-    causal   = torch.ones(T, T, dtype=torch.bool, device=x.device).tril()
-    return (same_doc & causal).unsqueeze(1)                         # (B, 1, T, T)
-
 def get_batch(data, batch_size, block_size):
-    """Sample batch_size chunks, slice to block_size, return (x, y, attn_mask)."""
     ix = torch.randint(len(data), (batch_size,))
     chunks = torch.from_numpy(data[ix.numpy()].astype(np.int64))   # (B, _seq_len)
     x = chunks[:, :block_size]
     y = chunks[:, 1:block_size + 1]
-    mask = _doc_mask(x)
     if device == "cuda":
-        x    = x.pin_memory().to(device, non_blocking=True)
-        y    = y.pin_memory().to(device, non_blocking=True)
-        mask = mask.pin_memory().to(device, non_blocking=True)
+        x = x.pin_memory().to(device, non_blocking=True)
+        y = y.pin_memory().to(device, non_blocking=True)
     else:
-        x, y, mask = x.to(device), y.to(device), mask.to(device)
-    return x, y, mask
+        x, y = x.to(device), y.to(device)
+    return x, y
 
 # extract document openings from the val split as fixed sample prompts + ground truth continuations
 def _val_prompts(n: int, prompt_tokens: int, continuation_tokens: int) -> list[tuple[str, str]]:
@@ -234,9 +210,9 @@ pbar = tqdm(range(start_step, args.max_steps), initial=start_step,
 
 for step in pbar:
     model.train()
-    x, y, attn_mask = get_batch(train_data, args.batch_size, model_cfg.block_size)
+    x, y = get_batch(train_data, args.batch_size, model_cfg.block_size)
     with autocast:
-        _, loss = model(x, y, attn_mask)
+        _, loss = model(x, y)
 
     optim_muon.zero_grad(set_to_none=True)
     optim_adam.zero_grad(set_to_none=True)
