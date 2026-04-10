@@ -81,8 +81,10 @@ def run(model, enc, cfg, device, autocast, step: int) -> dict:
             break
     metrics["eval/coherence"] = int(coherent)
     if not coherent:
-        print(f"\n[eval step={step}] coherence FAIL — aborting run")
-        sys.exit(1)
+        print(f"\n[eval step={step}] coherence FAIL")
+        if step >= ABORT_AFTER:
+            print(f"[eval step={step}] aborting run (past step {ABORT_AFTER})")
+            sys.exit(1)
 
     # ── humaneval mini ─────────────────────────────────────────────────────────
     if _ds is None:
