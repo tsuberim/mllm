@@ -40,11 +40,18 @@ image = (
 # Persistent volume holding corpus_train.bin + corpus_val.bin
 corpus_vol = modal.Volume.from_name("merlin-corpus", create_if_missing=True)
 
+# Persistent cache: HuggingFace downloads (tokenizer, datasets) + torch.compile artifacts
+cache_vol = modal.Volume.from_name("merlin-cache", create_if_missing=True)
+
+CACHE_DIR     = "/data/cache"
+HF_HOME       = f"{CACHE_DIR}/hf"
+INDUCTOR_CACHE = f"{CACHE_DIR}/inductor"
+
 
 @app.function(
     image=image,
     gpu="H100",
-    volumes={"/data/tokenized": corpus_vol},
+    volumes={"/data/tokenized": corpus_vol, CACHE_DIR: cache_vol},
     timeout=60 * 60 * 12,  # 12h max
     secrets=[modal.Secret.from_name("merlin")],
 )
@@ -57,7 +64,8 @@ def train(
     val_steps: int = 10,
     save_every: int = 1000,
     bf16: bool = False,
-    from_scratch: bool = True,
+    resume: bool = False,
+    tag: str = "",
 ) -> dict:
     # Clone repo at exact commit — only overhead on H100 (~5s)
     repo_dir = f"/tmp/{commit}"
@@ -82,8 +90,9 @@ def train(
     ]
     if bf16:
         cmd.append("--bf16")
-    if from_scratch:
-        cmd.append("--from_scratch")
+    if resume:
+        cmd.append("--resume")
+    cmd += ["--tag", tag or commit[:12]]
 
     print(f"[train] {' '.join(cmd)}")
 
@@ -97,7 +106,12 @@ def train(
         text=True,
         bufsize=1,
         cwd=repo_dir,
-        env={**os.environ, "DATA_DIR": "/data/tokenized"},
+        env={
+            **os.environ,
+            "DATA_DIR":               "/data/tokenized",
+            "HF_HOME":                HF_HOME,
+            "TORCHINDUCTOR_CACHE_DIR": INDUCTOR_CACHE,
+        },
     )
     for line in proc.stdout:
         print(line, end="", flush=True)
@@ -151,7 +165,8 @@ def main(
     val_steps: int = 10,
     save_every: int = 1000,
     bf16: bool = False,
-    from_scratch: bool = True,
+    resume: bool = False,
+    tag: str = "",
 ):
     if not commit:
         commit = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
@@ -176,6 +191,7 @@ def main(
         val_steps=val_steps,
         save_every=save_every,
         bf16=bf16,
-        from_scratch=from_scratch,
+        resume=resume,
+        tag=tag,
     )
     print(f"\nW&B: {result['wandb_url']}")

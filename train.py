@@ -32,12 +32,14 @@ parser.add_argument("--lr_muon",    type=float, default=0.02,  help="Muon lr (2-
 parser.add_argument("--grad_clip",  type=float, default=1.0)
 parser.add_argument("--wandb",      choices=["online", "disabled"], default="online")
 parser.add_argument("--bf16",       action="store_true", help="cast model to bfloat16 (required for ~7B on single GPU)")
-parser.add_argument("--from_scratch", action="store_true", help="ignore existing checkpoint and train from step 0")
+parser.add_argument("--resume",       action="store_true", help="resume from existing checkpoint")
+parser.add_argument("--tag",          type=str, default=None, help="tag for HF checkpoint filename (default: model name)")
 args = parser.parse_args()
 
 model_cfg = {"sanity": Config.sanity, "experiment": Config.experiment, "iphone": Config.iphone, "macbook": Config.macbook}[args.model]()
 Path("checkpoints").mkdir(exist_ok=True)
-CKPT_NAME = f"checkpoints/ckpt_{args.model}.pt"
+_tag      = args.tag if args.tag else args.model
+CKPT_NAME = f"checkpoints/ckpt_{_tag}.pt"
 HF_REPO   = os.environ["HF_REPO"]
 
 N_SAMPLE_PROMPTS = 4
@@ -212,7 +214,7 @@ def load_checkpoint():
         start_step = ckpt["step"] + 1
         print(f"resumed from step {start_step}")
 
-if not args.from_scratch:
+if args.resume:
     load_checkpoint()
 eval_ckpt.preload()
 EVAL_EVERY = args.eval_every if args.eval_every is not None else args.save_every
