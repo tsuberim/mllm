@@ -233,9 +233,9 @@ for step in pbar:
                 for _ in range(args.val_steps)
             ) / args.val_steps
 
-        samples = wandb.Table(columns=["prompt", "ground_truth", "sample"])
+        samples = wandb.Table(columns=["prompt", "completion", "sample"])
         for prompt, ground_truth in SAMPLE_PROMPTS:
-            samples.add_data(prompt, ground_truth, generate(prompt))
+            samples.add_data(prompt, generate(prompt), ground_truth)
 
         log["val/loss"] = val_loss
         log["samples"]  = samples
