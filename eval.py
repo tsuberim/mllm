@@ -12,9 +12,9 @@ Exits non-zero if any stage falls below its floor threshold.
 Stage 4 requires an instruction-tuned model loadable by mlx_lm (post-SFT only).
 
 Usage:
-    python eval.py --model iphone --weights checkpoints/weights.npz
-    python eval.py --model iphone --weights checkpoints/weights.npz --bits 4
-    python eval.py --model iphone --weights checkpoints/weights.npz --full --agent
+    python eval.py --model 3b --weights checkpoints/weights.npz
+    python eval.py --model 3b --weights checkpoints/weights.npz --bits 4
+    python eval.py --model 3b --weights checkpoints/weights.npz --full --agent
 """
 
 import argparse
@@ -175,7 +175,7 @@ def _bail(msg: str) -> None:
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model",   choices=["sanity", "experiment", "iphone", "macbook"], default="iphone")
+    parser.add_argument("--model",   choices=["sanity", "experiment", "3b", "7b"], default="3b")
     parser.add_argument("--weights", default="checkpoints/weights.npz")
     parser.add_argument("--bits",    type=int, default=0, choices=[0, 4, 8, 16])
     parser.add_argument("--full",    action="store_true", help="Full eval: 164 HumanEval + 500 MBPP problems")
@@ -187,7 +187,7 @@ def main():
     n_he   = 164 if args.full else 20
     n_mbpp = 500 if args.full else 20
     cfg    = {"sanity": Config.sanity, "experiment": Config.experiment,
-              "iphone": Config.iphone, "macbook": Config.macbook}[args.model]()
+              "3b": Config.b3, "7b": Config.b7}[args.model]()
 
     print(f"model    {args.weights}  ({args.model}, bits={args.bits})")
     print(f"problems humaneval={n_he}  mbpp={n_mbpp}\n")

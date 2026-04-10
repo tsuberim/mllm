@@ -160,10 +160,10 @@ class Config:
     def experiment(cls): return cls(n_embd=256, n_head=8, n_kv_head=2, n_layer=8, block_size=512)
 
     @classmethod
-    def iphone(cls): return cls(n_embd=3072, n_head=24, n_kv_head=8, n_layer=20, block_size=4096)
+    def b3(cls): return cls(n_embd=3072, n_head=24, n_kv_head=8, n_layer=20, block_size=4096)
 
     @classmethod
-    def macbook(cls): return cls(n_embd=4096, n_head=32, n_kv_head=8, n_layer=26, block_size=4096)
+    def b7(cls): return cls(n_embd=4096, n_head=32, n_kv_head=8, n_layer=26, block_size=4096)
 
 
 class RMSNorm(nn.Module):
@@ -297,7 +297,7 @@ def load_model(weights_path: str, cfg: Config, bits: int = 0) -> GPT:
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model",    choices=["sanity", "experiment", "iphone", "macbook"], default="iphone")
+    parser.add_argument("--model",    choices=["sanity", "experiment", "3b", "7b"], default="3b")
     parser.add_argument("--weights",  default="checkpoints/weights.npz")
     parser.add_argument("--prompt",   default="Once upon a time")
     parser.add_argument("--max_new",  type=int,   default=200)
@@ -311,7 +311,7 @@ if __name__ == "__main__":
     max_new_tokens = args.max_new
     temperature    = args.temp
 
-    cfg = {"sanity": Config.sanity, "experiment": Config.experiment, "iphone": Config.iphone, "macbook": Config.macbook}[args.model]()
+    cfg = {"sanity": Config.sanity, "experiment": Config.experiment, "3b": Config.b3, "7b": Config.b7}[args.model]()
     enc = _tok.load()
 
     print(f"loading {weights_path}...")

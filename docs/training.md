@@ -36,13 +36,13 @@ python train.py --model sanity --batch_size 2 --max_steps 2 --val_every 1 --val_
 # Experiment run (~21M params, local or cheap remote)
 python train.py --model experiment --batch_size 256 --max_steps 20000 --val_every 500 --val_steps 10 --save_every 500
 
-# iPhone scale (~3B params, H100 required)
-python train.py --model iphone --batch_size 16 --max_steps 100000 --val_every 1000 --val_steps 20 --save_every 1000 --bf16
+# 3B scale (~3B params, H100 required)
+python train.py --model 3b --batch_size 16 --max_steps 100000 --val_every 1000 --val_steps 20 --save_every 1000 --bf16
 ```
 
 ## Hyperparameters
 
-| | sanity | experiment | iphone |
+| | sanity | experiment | 3b |
 |---|---|---|---|
 | params | ~200K | ~21M | ~3.17B |
 | batch_size | 2 | 256 | 16 |

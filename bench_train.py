@@ -21,7 +21,7 @@ WARMUP  = 10
 MEASURE = 50
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--model",      choices=["sanity", "experiment", "iphone", "macbook"], default="experiment")
+parser.add_argument("--model",      choices=["sanity", "experiment", "3b", "7b"], default="experiment")
 parser.add_argument("--batch_size", type=int, default=8)
 parser.add_argument("--autocast",   action=argparse.BooleanOptionalAction, default=None,
                     help="force autocast on/off; default: on for cuda, off elsewhere")
@@ -54,7 +54,7 @@ def get_batch(batch_size, block_size):
 
 # ── model + optimizers ────────────────────────────────────────────────────────
 cfg = {"sanity": Config.sanity, "experiment": Config.experiment,
-       "iphone": Config.iphone, "macbook": Config.macbook}[args.model]()
+       "3b": Config.b3, "7b": Config.b7}[args.model]()
 model = GPT(cfg).to(device)
 if device == "cuda":
     model = torch.compile(model)

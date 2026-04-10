@@ -1,19 +1,19 @@
 # Merlin
 
-An efficient small language model built from scratch for local inference on Apple Silicon — MacBook Pro and iPhone.
+An efficient small language model built from scratch for local inference on Apple Silicon — 7B Pro and 3B.
 
 Educational in spirit, but aimed at being genuinely useful and open source.
 
 ## Goals
 
-- Maximize inference TPS and minimize memory on Apple Silicon (Mac + iPhone)
+- Maximize inference TPS and minimize memory on Apple Silicon (Mac + 3B)
 - Train from scratch on real data
 - Custom Metal kernels — no relying on framework defaults
-- iPhone target: model fits within ~4 GB RAM via int4 quantization
+- 3B target: model fits within ~4 GB RAM via int4 quantization
 
 ## Benchmarks
 
-Base model (~117M params) on M4 MacBook Pro:
+Base model (~117M params) on M4 7B Pro:
 
 | Setup | TPS | Peak Memory |
 |---|---|---|
@@ -21,7 +21,7 @@ Base model (~117M params) on M4 MacBook Pro:
 | fp32 + KV cache | 242.6 | 802 MB |
 | **int4 + KV cache** | **625.3** | **188 MB** |
 
-int4 + KV cache hits 625 TPS at 188 MB — well within iPhone's ~4 GB budget.
+int4 + KV cache hits 625 TPS at 188 MB — well within 3B's ~4 GB budget.
 
 ## Architecture
 
@@ -31,8 +31,8 @@ GPT-style decoder-only transformer with four configs:
 |---|---|---|---|---|---|
 | sanity | ~1.6M | 32 | 2 | 2 | 64 |
 | experiment | ~21M | 256 | 8 | 8 | 512 |
-| iphone | ~3.17B | 3072 | 24 | 20 | 4096 |
-| macbook | ~7.19B | 4096 | 32 | 26 | 4096 |
+| 3b | ~3.17B | 3072 | 24 | 20 | 4096 |
+| 7b | ~7.19B | 4096 | 32 | 26 | 4096 |
 
 Key design choices:
 - **RMSNorm** — faster, no mean subtraction
@@ -47,7 +47,7 @@ Key design choices:
 |---|---|
 | Training | PyTorch + CUDA + Triton (NVIDIA) |
 | Inference (Mac) | MLX + custom Metal kernels |
-| Inference (iPhone) | CoreML (planned) |
+| Inference (3B) | CoreML (planned) |
 | Data | TinyStories via tiktoken GPT-2 |
 | Observability | W&B |
 
@@ -69,8 +69,8 @@ pip install -r requirements.txt
 # Local experiment (2000 steps, ~10 min on MPS)
 ./train_experiment.sh
 
-# iPhone scale (requires NVIDIA)
-./train_iphone.sh
+# 3B scale (requires NVIDIA)
+./train_3b.sh
 ```
 
 ## Inference
@@ -102,7 +102,7 @@ docs/         — Architecture, stack, training, inference docs
 - Tiled int4 matmul Metal kernel (3–5× speedup potential)
 - Separate prefill / decode kernels (different optimal tiling per phase)
 - RoPE (replace learned positional embeddings)
-- CoreML export for iPhone deployment
+- CoreML export for 3B deployment
 
 ## License
 

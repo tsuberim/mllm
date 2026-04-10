@@ -109,4 +109,4 @@ doc_id = torch.cat([zeros, is_eos[:, :-1].cumsum(dim=1)], dim=1)  # (B, T)
 mask = (doc_id.unsqueeze(2) == doc_id.unsqueeze(1)) & causal       # (B, 1, T, T)
 ```
 
-Note: custom mask disables FlashAttention in SDPA. For T > ~1024 (iphone/macbook configs), switch to `flash_attn_varlen_func`.
+Note: custom mask disables FlashAttention in SDPA. For T > ~1024 (3b/7b configs), switch to `flash_attn_varlen_func`.

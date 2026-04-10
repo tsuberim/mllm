@@ -8,8 +8,8 @@ GPT-style decoder-only transformer. Design choices favour inference efficiency o
 |------|--------|--------|--------|-----------|---------|------------|-----|
 | sanity | ~1.6M | 32 | 2 | 2 | 2 | 64 | Pipeline sanity checks only |
 | experiment | ~21M | 256 | 8 | 2 | 8 | 512 | Local training experiments |
-| iphone | ~3.17B | 3072 | 24 | 8 | 20 | 4096 | iPhone target |
-| macbook | ~7.19B | 4096 | 32 | 8 | 26 | 4096 | MacBook target |
+| 3b | ~3.17B | 3072 | 24 | 8 | 20 | 4096 | 3B target |
+| 7b | ~7.19B | 4096 | 32 | 8 | 26 | 4096 | 7B target |
 
 Param counts are dominated by the vocabulary embedding (32016 × n_embd). Weight tying means tok_emb and head share the same tensor — counted once.
 

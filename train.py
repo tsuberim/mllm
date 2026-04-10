@@ -19,7 +19,7 @@ import eval_ckpt
 
 # ── args ──────────────────────────────────────────────────────────────────────
 parser = argparse.ArgumentParser()
-parser.add_argument("--model",      choices=["sanity", "experiment", "iphone", "macbook"], required=True)
+parser.add_argument("--model",      choices=["sanity", "experiment", "3b", "7b"], required=True)
 parser.add_argument("--batch_size", type=int,   required=True)
 parser.add_argument("--max_steps",  type=int,   required=True)
 parser.add_argument("--val_every",  type=int,   required=True)
@@ -36,7 +36,7 @@ parser.add_argument("--resume",       action="store_true", help="resume from exi
 parser.add_argument("--tag",          type=str, default=None, help="tag for HF checkpoint filename (default: model name)")
 args = parser.parse_args()
 
-model_cfg = {"sanity": Config.sanity, "experiment": Config.experiment, "iphone": Config.iphone, "macbook": Config.macbook}[args.model]()
+model_cfg = {"sanity": Config.sanity, "experiment": Config.experiment, "3b": Config.b3, "7b": Config.b7}[args.model]()
 Path("checkpoints").mkdir(exist_ok=True)
 _tag      = args.tag if args.tag else args.model
 CKPT_NAME = f"checkpoints/ckpt_{_tag}.pt"

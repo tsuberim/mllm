@@ -26,13 +26,13 @@ class Config:
 
 
     @classmethod
-    def iphone(cls):
-        """~3.17B params — iPhone target. head_dim=128, block_size=4096."""
+    def b3(cls):
+        """~3.17B params — 3B target. head_dim=128, block_size=4096."""
         return cls(n_embd=3072, n_head=24, n_kv_head=8, n_layer=20, block_size=4096)
 
     @classmethod
-    def macbook(cls):
-        """~7.19B params — MacBook target. head_dim=128, block_size=4096."""
+    def b7(cls):
+        """~7.19B params — 7B target. head_dim=128, block_size=4096."""
         return cls(n_embd=4096, n_head=32, n_kv_head=8, n_layer=26, block_size=4096)
 
 

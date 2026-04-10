@@ -54,8 +54,8 @@ else
 fi
 
 # ── train (5 hour safety cutoff) ──────────────────────────────────────────────
-echo "→ starting training (${TRAIN_SCRIPT:-train_macbook.sh}, 5h limit)..."
-timeout 5h bash "${TRAIN_SCRIPT:-train_macbook.sh}" 2>&1 | tee /workspace/train.log
+echo "→ starting training (${TRAIN_SCRIPT:-train_7b.sh}, 5h limit)..."
+timeout 5h bash "${TRAIN_SCRIPT:-train_7b.sh}" 2>&1 | tee /workspace/train.log
 EXIT=${PIPESTATUS[0]}
 
 if [ $EXIT -eq 0 ] || [ $EXIT -eq 124 ]; then

@@ -5,7 +5,7 @@ Merlin REPL — play with a trained checkpoint locally via MLX.
 Usage:
     python repl.py                          # latest checkpoint for experiment model
     python repl.py --tag <commit>           # specific run
-    python repl.py --model iphone --tag ... # different model size
+    python repl.py --model 3b --tag ... # different model size
     python repl.py --weights path/to/w.npz  # pre-converted weights
 """
 
@@ -157,7 +157,7 @@ def run_repl(model: GPT, enc, max_new: int, temperature: float):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model",       choices=["sanity", "experiment", "iphone", "macbook"],
+    parser.add_argument("--model",       choices=["sanity", "experiment", "3b", "7b"],
                         default="experiment")
     parser.add_argument("--tag",         default=None, help="commit tag (default: latest ckpt)")
     parser.add_argument("--weights",     default=None, help="path to pre-converted .npz")
@@ -171,7 +171,7 @@ if __name__ == "__main__":
     load_dotenv()
 
     cfg = {"sanity": Config.sanity, "experiment": Config.experiment,
-           "iphone": Config.iphone, "macbook": Config.macbook}[args.model]()
+           "3b": Config.b3, "7b": Config.b7}[args.model]()
     cfg.vocab_size = 32016  # our tokenizer
 
     enc = _tok.load()
