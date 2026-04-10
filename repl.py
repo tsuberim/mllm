@@ -34,7 +34,7 @@ def _convert(pt_path: Path, out_path: Path):
 
     arrays = {}
     for k, v in sd.items():
-        # drop optimizer / training-only keys; handle weight tying
+        k = k.removeprefix("_orig_mod.")
         arrays[k] = v.float().numpy()
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
