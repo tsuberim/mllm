@@ -244,7 +244,7 @@ for step in pbar:
 
     log = {"train/loss": loss.item(), "train/grad_norm": grad_norm}
 
-    if step % args.val_every == 0:
+    if step % args.val_every == 0 and step > 0:
         model.eval()
         with torch.no_grad(), autocast:
             val_loss = sum(
@@ -265,7 +265,7 @@ for step in pbar:
     if step % args.save_every == 0:
         save_checkpoint(step)
 
-    if step % EVAL_EVERY == 0:
+    if step % EVAL_EVERY == 0 and step > 0:
         log.update(eval_ckpt.run(model, enc, model_cfg, device, autocast, step))
         model.train()
 
