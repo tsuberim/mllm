@@ -178,6 +178,7 @@ if __name__ == "__main__":
         from mlx.nn import quantize
         model = GPT(cfg)
         mx.eval(model.parameters())
+        nparams = sum(v.size for _, v in tree_flatten(model.parameters()))
         if args.bits in (4, 8):
             quantize(model, group_size=64, bits=args.bits)
         for block in model.blocks:
@@ -193,7 +194,8 @@ if __name__ == "__main__":
     else:
         parser.error("provide --tag <commit>, --weights <path>, or --random")
     from mlx.utils import tree_flatten
-    nparams = sum(v.size for _, v in tree_flatten(model.parameters()))
+    if not args.random:
+        nparams = sum(v.size for _, v in tree_flatten(model.parameters()))
     print(f"model: {args.model}  params: {nparams:,}")
 
     run_repl(model, enc, args.max_new, args.temperature)
