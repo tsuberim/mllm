@@ -2,13 +2,13 @@
 import time
 import argparse
 import mlx.core as mx
-import tiktoken
+import tok as _tok
 
 from infer import load_model, Config
 
 
 def bench_once(model, prompt: str, n_tokens: int) -> dict:
-    enc = tiktoken.get_encoding("gpt2")
+    enc = _tok.load()
     tokens = enc.encode(prompt)
     idx = mx.array([tokens])
     mx.eval(idx)

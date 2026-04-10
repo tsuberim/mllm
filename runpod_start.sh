@@ -37,17 +37,20 @@ else
 fi
 
 # ── env ───────────────────────────────────────────────────────────────────────
+export HF_HOME=/workspace/hf_cache
+
 cat > .env <<EOF
 HF_REPO=${HF_REPO}
 WANDB_API_KEY=${WANDB_API_KEY}
 EOF
 
 # ── data ──────────────────────────────────────────────────────────────────────
-if [ ! -f "data_train.bin" ]; then
-    echo "→ tokenizing TinyStories (~5 min)..."
-    python data.py
+if [ ! -d "/workspace/data/tokenized" ] || [ -z "$(ls /workspace/data/tokenized/shard_*.bin 2>/dev/null)" ]; then
+    echo "→ ERROR: tokenized shards not found at /workspace/data/tokenized"
+    echo "   Upload the dataset to the volume before launching a training pod."
+    exit 1
 else
-    echo "→ data already prepared"
+    echo "→ data shards found"
 fi
 
 # ── train (5 hour safety cutoff) ──────────────────────────────────────────────

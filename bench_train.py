@@ -42,8 +42,9 @@ autocast = (torch.autocast(device_type="cuda", dtype=torch.bfloat16)
             if use_autocast else contextlib.nullcontext())
 
 # ── data ──────────────────────────────────────────────────────────────────────
-assert Path("data_train.bin").exists(), "run data.py first"
-tokens = np.memmap("data_train.bin", dtype=np.uint16, mode="r")
+_shards = sorted(Path("data/tokenized").glob("shard_*.bin"))
+assert _shards, "no shards found in data/tokenized — run the data pipeline first"
+tokens = np.memmap(_shards[0], dtype=np.uint16, mode="r")
 
 def get_batch(batch_size, block_size):
     ix = torch.randint(len(tokens) - block_size, (batch_size,))

@@ -1,5 +1,9 @@
 # Research Index
 
+## Eval Pipeline
+
+- [eval.py](../eval.py) — staged accuracy + perf pipeline with early exit: coherence → HumanEval → MBPP → perf → agent harness (opt-in, post-SFT)
+
 ## Benchmarks
 
 - [benchmarks/README.md](benchmarks/README.md) — accuracy, architecture, and Apple Silicon inference comparison across 13 models in the 0.5B–4B range
@@ -17,6 +21,15 @@
 - [distillation/README.md](distillation/README.md) — survey of logit/distribution datasets for KD, formats, storage costs, gaps, and recommendations for a 117M model
 - [distillation/methods.md](distillation/methods.md) — practical training guide: loss selection, temperature, mixing ratios, teacher size, offline pipeline, Apple Silicon notes
 - [distillation/raw/](distillation/raw/) — raw notes per source (arcee dataset, MiniLLM, GKD, MiniPLM, design-space paper, sparse logit sampling, NeMo, DistillKit, GOLD trainer, loss functions, scaling laws, pipeline)
+
+## Feasibility
+
+- [feasibility/harness.py](feasibility/harness.py) — agentic eval harness: runs tasks against a 3B model under 9.5K context, measures correctness, TPS, memory
+- [feasibility/tasks.py](feasibility/tasks.py) — task suite: search, analysis, transform, scripting, multi-step, tree, semantic, iterative, pipeline, parallel batch, dataset cleaning (53 tasks total)
+
+## Training Ideas
+
+- **Grad-norm-based source weighting** — sample training sources proportional to per-source EMA of gradient norm (already computed for grad clipping, zero extra cost). Start weights=1 (uniform), converge toward the importance-sampling distribution over time. Theoretically minimises gradient variance (Katharopoulos & Fleuret, ICML 2018). Hypothesis: reduces Python over-representation effect without manual tuning. Test: compare val loss curve and convergence rate vs. fixed source weights on experiment config.
 
 ## Metal
 
