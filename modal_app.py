@@ -19,7 +19,7 @@ import modal
 
 REPO_URL = "https://github.com/tsuberim/mllm.git"
 
-app = modal.App("merlin")
+app = modal.App("merlin-trainer")
 
 # Deps pre-baked into image — built on cheap CPU infra, not on H100.
 # Rebuilds automatically when requirements.txt changes.
@@ -116,6 +116,7 @@ def train(
             m = wandb_pat.search(line)
             if m:
                 wandb_url = m.group(0)
+                print(f"\n>>> W&B: {wandb_url}\n", flush=True)
 
     proc.wait()
     if proc.returncode != 0:
