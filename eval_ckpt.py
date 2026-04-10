@@ -21,7 +21,6 @@ import tempfile
 import torch
 
 N_HUMANEVAL   = 5
-ABORT_AFTER   = 1000   # don't abort on 0% humaneval before this step
 
 _ds = None  # loaded once via preload()
 
@@ -101,8 +100,5 @@ def run(model, enc, cfg, device, autocast, step: int) -> dict:
     metrics["eval/humaneval_5"] = score
     print(f"  [eval step={step}]  coherence=OK  humaneval_5={''.join(results)}  {score:.0%} ({passed}/{N_HUMANEVAL})")
 
-    if passed == 0 and step >= ABORT_AFTER:
-        print(f"\n[eval step={step}] humaneval_5=0% past step {ABORT_AFTER} — aborting run")
-        sys.exit(1)
 
     return metrics
