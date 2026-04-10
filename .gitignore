@@ -13,5 +13,6 @@ data/filtered/
 data/deduped/
 data/tokenized/
 data/tokenizer/
+data/traces/
 data/repos/
 checkpoints/
