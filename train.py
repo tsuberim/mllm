@@ -274,11 +274,8 @@ for step in pbar:
     model.train()
     ema_weights = sample_ema / sample_ema.sum() if args.grad_norm_ema > 0 else None
     x, y, ix = get_batch(train_data, args.batch_size, model_cfg.block_size, weights=ema_weights)
-    sw = None
-    if args.grad_norm_ema > 0:
-        sw = torch.from_numpy(sample_ema[ix.numpy()]).to(device=device, dtype=dtype)
     with autocast:
-        _, loss = model(x, y, sample_weights=sw)
+        _, loss = model(x, y)
 
     optim_muon.zero_grad(set_to_none=True)
     optim_adam.zero_grad(set_to_none=True)
