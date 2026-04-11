@@ -35,10 +35,10 @@ parser.add_argument("--grad_clip",  type=float, default=1.0)
 parser.add_argument("--wandb",      choices=["online", "disabled"], default="online")
 parser.add_argument("--bf16",             action="store_true", help="cast model to bfloat16 (required for ~7B on single GPU)")
 parser.add_argument("--grad_checkpoint",  action="store_true", help="gradient checkpointing (saves activation memory; enables large batches on big models)")
-parser.add_argument("--ema_halflife",     type=float, default=0.0,
-                    help="Half-life in dataset epochs for per-chunk grad-norm importance sampling "
-                         "(0 = disabled). Alpha is computed as 0.5^(1/halflife), so the meaning "
-                         "is scale-invariant across dataset sizes, batch sizes, and step counts.")
+parser.add_argument("--ema_stabilize",    type=float, default=0.0,
+                    help="Visits per chunk after which the grad-norm EMA stabilizes (0 = disabled). "
+                         "Sets the EMA effective window: alpha = 1 - 1/N. "
+                         "E.g. 4 → alpha=0.75, 10 → alpha=0.9.")
 parser.add_argument("--resume",       action="store_true", help="resume from existing checkpoint")
 parser.add_argument("--tag",          type=str, default=None, help="tag for HF checkpoint filename (default: model name)")
 args = parser.parse_args()
@@ -136,15 +136,12 @@ def _val_prompts(n: int, prompt_tokens: int, continuation_tokens: int) -> list[t
 # init=1.0 > typical grad norm (~0.3-0.5) so all chunks sampled uniformly until visited
 # capped at 1.0 so chunks can only decay downward from init
 _alpha_ema = 0.0
-if args.ema_halflife > 0:
-    # stabilize_visits = 3-4 → half-life ≈ 2 epochs → alpha = 0.5^(1/2) ≈ 0.707
-    # after 3 visits: weight of init = alpha^3 ≈ 0.35 (mostly replaced by observations)
-    # after 4 visits: weight of init = alpha^4 ≈ 0.25 (well stabilized)
-    _alpha_ema = 0.5 ** (1.0 / args.ema_halflife)
+if args.ema_stabilize > 0:
+    # effective window = 1/(1-alpha) = N  →  alpha = 1 - 1/N
+    _alpha_ema = 1.0 - 1.0 / args.ema_stabilize
     _total_epochs = args.max_steps * args.batch_size / len(train_data)
-    _visits_to_stabilize = -3.0 / np.log2(_alpha_ema)  # visits until init weight < 12.5%
-    print(f"[ema] halflife={args.ema_halflife} epochs  alpha={_alpha_ema:.4f}  "
-          f"total_epochs={_total_epochs:.1f}  stabilizes_after={_visits_to_stabilize:.1f} visits")
+    print(f"[ema] stabilize={args.ema_stabilize} visits  alpha={_alpha_ema:.4f}  "
+          f"total_epochs={_total_epochs:.1f}")
 sample_ema = np.ones(len(train_data), dtype=np.float32)
 
 SAMPLE_PROMPTS = _val_prompts(N_SAMPLE_PROMPTS, PROMPT_TOKENS, SAMPLE_NEW)
