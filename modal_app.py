@@ -169,7 +169,104 @@ def train(
     cpu=32,
     memory=32768,  # 32 GB — DataTrove streams, but filter stages need headroom
     volumes={DATA_ROOT: vol},
-    timeout=60 * 60 * 12,  # 12h max
+    timeout=60 * 60 * 6,  # 6h per source
+    secrets=[modal.Secret.from_name("merlin")],
+)
+def filter_source(commit: str, source: str, full: bool = False, workers: int = 28) -> dict:
+    """Download + filter a single source. One Modal container per source, run in parallel."""
+    repo_dir = f"/tmp/{commit}"
+    if not os.path.exists(f"{repo_dir}/.git"):
+        subprocess.run(
+            ["git", "clone", "--quiet", "--filter=blob:none", "--no-checkout", REPO_URL, repo_dir],
+            check=True,
+        )
+    subprocess.run(
+        ["git", "-C", repo_dir, "checkout", "--quiet", "--detach", commit],
+        check=True,
+    )
+
+    processed_dir = f"{DATA_ROOT}/processed"
+    logs_dir      = f"{DATA_ROOT}/pipeline-logs"
+    os.makedirs(processed_dir, exist_ok=True)
+    os.makedirs(logs_dir, exist_ok=True)
+
+    env = {**os.environ, "HF_HOME": HF_HOME}
+    cmd = [
+        sys.executable, "-u", f"{repo_dir}/data/pipeline/pipeline.py",
+        "--source",  source,
+        "--out",     processed_dir,
+        "--logs",    logs_dir,
+        "--workers", str(workers),
+    ] + (["--full"] if full else [])
+
+    print(f"[filter_source:{source}] starting")
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                            cwd=repo_dir, env=env)
+    for line in proc.stdout:
+        print(line.decode("utf-8", errors="replace"), end="", flush=True)
+    proc.wait()
+    if proc.returncode != 0:
+        raise RuntimeError(f"pipeline.py exited {proc.returncode} for source={source}")
+    vol.commit()
+    print(f"[filter_source:{source}] done")
+    return {"source": source}
+
+
+@app.function(
+    image=pipeline_image,
+    cpu=32,
+    memory=32768,
+    volumes={DATA_ROOT: vol},
+    timeout=60 * 60 * 6,
+    secrets=[modal.Secret.from_name("merlin")],
+)
+def tokenize_corpus(commit: str, workers: int = 28) -> dict:
+    """Tokenize + pack all processed sources into corpus_train.bin / corpus_val.bin."""
+    repo_dir = f"/tmp/{commit}"
+    if not os.path.exists(f"{repo_dir}/.git"):
+        subprocess.run(
+            ["git", "clone", "--quiet", "--filter=blob:none", "--no-checkout", REPO_URL, repo_dir],
+            check=True,
+        )
+    subprocess.run(
+        ["git", "-C", repo_dir, "checkout", "--quiet", "--detach", commit],
+        check=True,
+    )
+
+    vol.reload()  # pick up files written by filter_source containers
+    processed_dir = f"{DATA_ROOT}/processed"
+    tokenized_dir = f"{DATA_ROOT}/tokenized-new"
+    tok_dir       = f"{DATA_ROOT}/tokenizer"
+    os.makedirs(tokenized_dir, exist_ok=True)
+
+    env = {**os.environ, "HF_HOME": HF_HOME}
+    cmd = [
+        sys.executable, "-u", f"{repo_dir}/data/pipeline/05_tokenize.py",
+        "--in",      processed_dir,
+        "--tok",     tok_dir,
+        "--out",     tokenized_dir,
+        "--workers", str(workers),
+    ]
+
+    print("[tokenize_corpus] starting")
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                            cwd=repo_dir, env=env)
+    for line in proc.stdout:
+        print(line.decode("utf-8", errors="replace"), end="", flush=True)
+    proc.wait()
+    if proc.returncode != 0:
+        raise RuntimeError(f"05_tokenize.py exited {proc.returncode}")
+    vol.commit()
+    print("[tokenize_corpus] done")
+    return {"tokenized_dir": tokenized_dir}
+
+
+@app.function(
+    image=pipeline_image,
+    cpu=2,
+    memory=2048,
+    volumes={DATA_ROOT: vol},
+    timeout=60 * 60 * 12,
     secrets=[modal.Secret.from_name("merlin")],
 )
 def build_corpus(
@@ -180,78 +277,29 @@ def build_corpus(
     hf_corpus_repo: str = "tsuberim/merlin-corpus-v1",
 ):
     """
-    Full corpus pipeline on a CPU machine:
-      1. pipeline.py  — DataTrove download + filter per source  → /data/processed/
-      2. 05_tokenize.py — multiprocess tokenize + pack          → /data/tokenized-new/
-      3. Upload corpus_train.bin + corpus_val.bin to HF dataset repo
-    Resumable: re-run with same args to continue from last completed shard/source.
+    Full corpus pipeline — parallel per-source filtering, then tokenize, then HF upload.
+      Step 1: filter_source × N  (one Modal container per source, all in parallel)
+      Step 2: tokenize_corpus    (single container after all sources done)
+      Step 3: upload to HF
+    Resumable: DataTrove tracks completed shards; re-run skips finished sources.
     """
-    import shutil
+    source_list = [s.strip() for s in sources.split(",")]
+    print(f"[build_corpus] sources={source_list}  full={full}  workers={workers}")
 
-    repo_dir = f"/tmp/{commit}"
-    subprocess.run(
-        ["git", "clone", "--quiet", "--filter=blob:none", "--no-checkout", REPO_URL, repo_dir],
-        check=True,
-    )
-    subprocess.run(
-        ["git", "-C", repo_dir, "checkout", "--quiet", "--detach", commit],
-        check=True,
-    )
-    print(f"[pipeline] checked out {commit[:12]}")
-
-    processed_dir  = f"{DATA_ROOT}/processed"
-    tokenized_dir  = f"{DATA_ROOT}/tokenized-new"
-    logs_dir       = f"{DATA_ROOT}/pipeline-logs"
-    tok_dir        = f"{DATA_ROOT}/tokenizer"
-    os.makedirs(processed_dir, exist_ok=True)
-    os.makedirs(tokenized_dir, exist_ok=True)
-    os.makedirs(logs_dir, exist_ok=True)
-
-    env = {
-        **os.environ,
-        "HF_HOME": HF_HOME,
-    }
-
-    # ── step 1: DataTrove pipeline ─────────────────────────────────────────────
-    print(f"\n[pipeline] step 1: download + filter (sources={sources}, full={full})")
-    cmd1 = [
-        sys.executable, "-u", f"{repo_dir}/data/pipeline/pipeline.py",
-        "--out",     processed_dir,
-        "--logs",    logs_dir,
-        "--workers", str(workers),
-    ] + (["--full"] if full else [])
-    for source in sources.split(","):
-        cmd1 += ["--source", source.strip()]
-
-    proc = subprocess.Popen(cmd1, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                            cwd=repo_dir, env=env)
-    for line in proc.stdout:
-        print(line.decode("utf-8", errors="replace"), end="", flush=True)
-    proc.wait()
-    if proc.returncode != 0:
-        raise RuntimeError(f"pipeline.py exited {proc.returncode}")
-    vol.commit()
+    # ── step 1: parallel per-source filtering ─────────────────────────────────
+    print("\n[build_corpus] step 1: fan out filter_source (one container per source)")
+    args = [(commit, src, full, workers) for src in source_list]
+    results = list(filter_source.starmap(args))
+    print(f"[build_corpus] step 1 done: {[r['source'] for r in results]}")
 
     # ── step 2: tokenize + pack ────────────────────────────────────────────────
-    print(f"\n[pipeline] step 2: tokenize + pack")
-    cmd2 = [
-        sys.executable, "-u", f"{repo_dir}/data/pipeline/05_tokenize.py",
-        "--in",      processed_dir,
-        "--tok",     tok_dir,
-        "--out",     tokenized_dir,
-        "--workers", str(workers),
-    ]
-    proc = subprocess.Popen(cmd2, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                            cwd=repo_dir, env=env)
-    for line in proc.stdout:
-        print(line.decode("utf-8", errors="replace"), end="", flush=True)
-    proc.wait()
-    if proc.returncode != 0:
-        raise RuntimeError(f"05_tokenize.py exited {proc.returncode}")
-    vol.commit()
+    print("\n[build_corpus] step 2: tokenize + pack")
+    tokenize_corpus.remote(commit, workers)
 
     # ── step 3: upload to HF ──────────────────────────────────────────────────
-    print(f"\n[pipeline] step 3: uploading to {hf_corpus_repo}")
+    vol.reload()
+    tokenized_dir = f"{DATA_ROOT}/tokenized-new"
+    print(f"\n[build_corpus] step 3: uploading to {hf_corpus_repo}")
     from huggingface_hub import HfApi, create_repo
     hf = HfApi()
     create_repo(hf_corpus_repo, repo_type="dataset", exist_ok=True,
@@ -272,7 +320,7 @@ def build_corpus(
         )
         print(f"    done")
 
-    print(f"\n[pipeline] corpus published to {hf_corpus_repo}")
+    print(f"\n[build_corpus] corpus published to {hf_corpus_repo}")
     return {"repo": hf_corpus_repo}
 
 
