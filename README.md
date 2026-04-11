@@ -1,3 +1,5 @@
+<img src="docs/logo.svg" alt="Merlin wizard hat logo" width="64" align="left" style="margin-right:12px; image-rendering:pixelated;" />
+
 # Merlin — Specialized Agentic Coding Model
 
 A 3B language model built from scratch **exclusively** for agentic coding — not a general assistant, not a fine-tuned GPT. Every training token, every design decision, every protocol token is optimized for one job: executing code tasks fast, locally, and at scale.
