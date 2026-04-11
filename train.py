@@ -29,7 +29,8 @@ parser.add_argument("--eval_every", type=int,   default=None,
                     help="run checkpoint eval every N steps (default: same as save_every)")
 parser.add_argument("--lr",         type=float, default=3e-4,  help="AdamW peak lr (embeddings, norms)")
 parser.add_argument("--lr_muon",    type=float, default=0.02,  help="Muon peak lr (2-D weight matrices)")
-parser.add_argument("--lr_min",     type=float, default=0.0,   help="min lr at end of cosine decay (0 = no schedule)")
+parser.add_argument("--lr_min",     type=float, default=0.0,   help="min lr for AdamW at end of cosine decay (0 = no schedule)")
+parser.add_argument("--lr_min_muon",type=float, default=None,  help="min lr for Muon at end of cosine decay (default: same ratio as lr_min/lr)")
 parser.add_argument("--warmup",     type=int,   default=0,     help="linear warmup steps")
 parser.add_argument("--grad_clip",  type=float, default=1.0)
 parser.add_argument("--wandb",      choices=["online", "disabled"], default="online")
@@ -248,25 +249,34 @@ wandb.init(
     mode=args.wandb,
     config={**model_cfg.__dict__, "batch_size": args.batch_size,
             "lr": args.lr, "lr_muon": args.lr_muon,
+            "lr_min": args.lr_min, "lr_min_muon": args.lr_min_muon,
+            "warmup": args.warmup,
             "max_steps": args.max_steps, "device": device},
 )
 
 # ── lr schedule ───────────────────────────────────────────────────────────────
 import math
 
-def get_lr(step: int, peak_lr: float) -> float:
+def get_lr(step: int, peak_lr: float, min_lr: float = 0.0) -> float:
     """Linear warmup → cosine decay. Returns peak_lr if no schedule configured."""
-    if args.lr_min == 0.0 and args.warmup == 0:
+    if min_lr == 0.0 and args.warmup == 0:
         return peak_lr
     # warmup
     if step < args.warmup:
         return peak_lr * (step + 1) / max(args.warmup, 1)
     # cosine decay
-    if args.lr_min > 0:
+    if min_lr > 0:
         progress = (step - args.warmup) / max(args.max_steps - args.warmup, 1)
         cosine   = 0.5 * (1.0 + math.cos(math.pi * progress))
-        return args.lr_min + (peak_lr - args.lr_min) * cosine
+        return min_lr + (peak_lr - min_lr) * cosine
     return peak_lr
+
+# Per-optimizer min LRs: Muon defaults to the same ratio as AdamW (lr_min/lr)
+_lr_min_adam = args.lr_min
+_lr_min_muon = (
+    args.lr_min_muon if args.lr_min_muon is not None
+    else (args.lr_muon * args.lr_min / args.lr if args.lr_min > 0 else 0.0)
+)
 
 def set_lr(optimizers, lrs):
     for opt, lr in zip(optimizers, lrs):
@@ -279,8 +289,8 @@ pbar = tqdm(range(start_step, args.max_steps), initial=start_step,
 
 for step in pbar:
     # apply lr schedule
-    lr_now      = get_lr(step, args.lr)
-    lr_muon_now = get_lr(step, args.lr_muon)
+    lr_now      = get_lr(step, args.lr,      _lr_min_adam)
+    lr_muon_now = get_lr(step, args.lr_muon, _lr_min_muon)
     set_lr([optim_adam, optim_muon], [lr_now, lr_muon_now])
 
     model.train()

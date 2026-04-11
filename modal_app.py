@@ -89,8 +89,8 @@ def train(
     save_every: int = 1000,
     bf16: bool = True,
     grad_checkpoint: bool = False,
-    lr_min: float = 0.0,
-    warmup: int = 0,
+    lr_min: float = 3e-5,
+    warmup: int = 200,
     ema_count: float = 0.0,
     resume: bool = False,
     tag: str = "",
@@ -729,16 +729,19 @@ def scan_repos(
     memory=4096,
     timeout=15 * 60,   # 15 min per repo
     retries=0,
+    volumes={DATA_ROOT: vol},
 )
 def mutate_repo(repo_json: str, commit: str, n_tasks: int = 20) -> list[str]:
     """
-    Clone a repo, install deps, generate AST-mutation tasks, return task records as JSON strings.
+    Clone a repo, install deps, generate AST-mutation tasks, zip the repo for later use.
     Runs on Modal CPU — uses LocalSandbox (no Docker needed inside the container).
 
-    Each returned record has the full task dataset schema:
-      id, task_name, task_category, repo, repo_commit, repo_stars, repo_topics,
-      repo_license, mutation_kind, mutation_description, mutated_file, mutation_lineno,
-      mutation_patch, failing_tests, n_failing_tests, task, test_snapshots
+    Writes one zip to /data/repos/zips/{owner}__{name}@{commit}.zip (idempotent).
+    Returns task records as JSON strings; each record includes repo_zip_key for lookup.
+
+    Schema: id, task_name, task_category, repo, repo_commit, repo_zip_key, repo_stars,
+            repo_topics, repo_license, mutation_kind, mutation_description, mutated_file,
+            mutation_lineno, mutation_patch, failing_tests, n_failing_tests, task, test_snapshots
     """
     import hashlib
     import json
@@ -748,9 +751,10 @@ def mutate_repo(repo_json: str, commit: str, n_tasks: int = 20) -> list[str]:
 
     repo = json.loads(repo_json)
     full_name = repo["full_name"]
-    repo_dir = Path(f"/tmp/repos/{full_name.replace('/', '__')}")
+    slug = full_name.replace("/", "__")
+    repo_dir = Path(f"/tmp/repos/{slug}")
 
-    # Clone mllm at commit to import harness (cached if container is warm)
+    # Clone mllm at commit to import harness (cached across warm containers)
     mllm_dir = Path("/tmp/mllm")
     if not (mllm_dir / "harness").exists():
         subprocess.run(
@@ -786,6 +790,20 @@ def mutate_repo(repo_json: str, commit: str, n_tasks: int = 20) -> list[str]:
             n_tasks=n_tasks,
             sandbox_class=LocalSandbox,
         )
+        if not tasks:
+            return []
+
+        repo_commit = tasks[0].repo_commit
+        zip_key = f"{slug}@{repo_commit}"
+
+        # Zip the clean repo (pre-mutation) — used at trace gen time to reconstruct
+        # the environment without re-cloning. Idempotent: skip if already zipped.
+        zips_dir = Path(f"{DATA_ROOT}/repos/zips")
+        zips_dir.mkdir(parents=True, exist_ok=True)
+        zip_path = zips_dir / f"{zip_key}.zip"
+        if not zip_path.exists():
+            shutil.make_archive(str(zip_path.with_suffix("")), "zip", str(repo_dir))
+        vol.commit()
 
         records = []
         for task in tasks:
@@ -796,7 +814,8 @@ def mutate_repo(repo_json: str, commit: str, n_tasks: int = 20) -> list[str]:
                 "task_name": task.name,
                 "task_category": task.category,
                 "repo": full_name,
-                "repo_commit": task.repo_commit,
+                "repo_commit": repo_commit,
+                "repo_zip_key": zip_key,
                 "repo_stars": repo.get("stars", 0),
                 "repo_topics": repo.get("topics", []),
                 "repo_license": repo.get("license", ""),
@@ -808,7 +827,6 @@ def mutate_repo(repo_json: str, commit: str, n_tasks: int = 20) -> list[str]:
                 "failing_tests": task.failing_tests,
                 "n_failing_tests": len(task.failing_tests),
                 "task": task.instruction,
-                "test_snapshots": task.test_snapshots,
             }
             records.append(json.dumps(record, ensure_ascii=False))
         return records

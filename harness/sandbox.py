@@ -10,6 +10,7 @@ Usage:
         print(result["stdout"], result["exit_code"])
 """
 
+import os
 import subprocess
 import threading
 import uuid
@@ -119,3 +120,53 @@ class Sandbox:
 
     def __exit__(self, *_):
         self.stop()
+
+
+class LocalSandbox:
+    """Sandbox that runs bash commands via subprocess in the host environment.
+
+    Used on Modal and other environments where Docker is unavailable.
+    The container itself provides isolation — no nested Docker needed.
+    Accepts the same constructor kwargs as Sandbox so callers are interchangeable.
+    """
+
+    def __init__(self, repo_path: str | Path, **kwargs):
+        self.repo_path = Path(repo_path).resolve()
+
+    def bash(self, cmd: str, timeout: int = BASH_TIMEOUT_S) -> BashResult:
+        venv_bin = str(self.repo_path / ".venv" / "bin")
+        env = {
+            **os.environ,
+            "VIRTUAL_ENV": str(self.repo_path / ".venv"),
+            "PATH": f"{venv_bin}:{os.environ.get('PATH', '')}",
+        }
+        try:
+            result = subprocess.run(
+                ["bash", "-c", cmd],
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                cwd=str(self.repo_path),
+                env=env,
+            )
+            stdout, stdout_trunc = _truncate(result.stdout, MAX_STDOUT_LINES)
+            stderr, stderr_trunc = _truncate(result.stderr, MAX_STDERR_LINES)
+            return BashResult(
+                stdout=stdout,
+                stderr=stderr,
+                exit_code=result.returncode,
+                truncated=stdout_trunc or stderr_trunc,
+            )
+        except subprocess.TimeoutExpired:
+            return BashResult(
+                stdout="",
+                stderr=f"# command timed out after {timeout}s",
+                exit_code=124,
+                truncated=False,
+            )
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        pass

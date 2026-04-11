@@ -147,6 +147,138 @@ def clone_repo(repo: dict) -> Path | None:
 
 MIN_TESTS = 20  # require at least this many passing tests
 
+# Packages that indicate tests need a running external service.
+# Presence in requirements is a strong signal; we also scan test source directly.
+_SERVICE_PACKAGES = {
+    # databases
+    "psycopg2", "psycopg2-binary", "psycopg", "asyncpg", "aiopg",
+    "pymysql", "aiomysql", "mysqlclient",
+    "sqlalchemy",           # often used with real DB URIs in tests
+    "alembic",
+    "pymongo", "motor",
+    "redis", "aioredis",
+    "elasticsearch", "opensearch-py",
+    "cassandra-driver",
+    "neo4j",
+    "influxdb", "influxdb-client",
+    # cloud / object storage
+    "boto3", "botocore", "aiobotocore", "s3fs",
+    "google-cloud-storage", "google-cloud-bigquery", "google-cloud-pubsub",
+    "azure-storage-blob", "azure-servicebus",
+    # message brokers
+    "pika",                 # RabbitMQ
+    "confluent-kafka", "kafka-python", "aiokafka",
+    "celery",
+    # service orchestration in tests
+    "testcontainers",
+    "pytest-docker",
+    "docker",               # direct Docker SDK use in tests
+    # email / comms
+    "sendgrid", "twilio",
+    # other network services
+    "ldap3", "python-ldap",
+    "paramiko",             # SSH
+    "ftplib",               # stdlib but signals network use
+    "smtplib",
+}
+
+# Patterns in test source that indicate live service connections.
+# Uses simple substring / regex matching — fast, no AST needed.
+_SERVICE_PATTERNS = [
+    # DB connection strings / clients
+    r"psycopg2\.connect\(",
+    r"asyncpg\.connect\(",
+    r"pymysql\.connect\(",
+    r"pymongo\.MongoClient\(",
+    r"motor\.motor_asyncio\.",
+    r"redis\.Redis\(",
+    r"redis\.StrictRedis\(",
+    r"aioredis\.from_url\(",
+    r"elasticsearch\.Elasticsearch\(",
+    r"create_engine\(",          # SQLAlchemy — might be sqlite, checked below
+    # docker / testcontainers
+    r"testcontainers\.",
+    r"DockerContainer\(",
+    r"from docker import",
+    r"import docker",
+    # cloud SDKs
+    r"boto3\.client\(",
+    r"boto3\.resource\(",
+    r"storage\.Client\(",
+    # env-var guards that reveal integration test intent
+    r'pytest\.skip\([^)]*(?:database|db|redis|mongo|rabbit|kafka|service)',
+    r'os\.environ\[.(?:DATABASE_URL|REDIS_URL|MONGO_URI|BROKER_URL|S3_BUCKET)',
+    r'os\.getenv\(.(?:DATABASE_URL|REDIS_URL|MONGO_URI|BROKER_URL)',
+]
+
+# SQLAlchemy with sqlite is fine — only flag real DB engines
+_SQLITE_ONLY_RE = r'create_engine\(["\']sqlite'
+
+
+def needs_external_services(repo_path: Path) -> bool:
+    """
+    Return True if the repo's tests likely require a running external service
+    (database, Redis, S3, broker, etc.).
+
+    Two checks (both after clone, no network):
+    1. Service-indicating packages in any requirements manifest.
+    2. Service-connection patterns in conftest.py and test source files.
+    """
+    import re
+
+    # --- 1. Requirements manifests ---
+    req_files = (
+        list(repo_path.glob("requirements*.txt"))
+        + list(repo_path.glob("*/requirements*.txt"))
+        + list(repo_path.glob("**/requirements*.txt"))
+    )
+    for req_file in req_files:
+        try:
+            content = req_file.read_text(errors="replace").lower()
+            for pkg in _SERVICE_PACKAGES:
+                if pkg in content:
+                    return True
+        except Exception:
+            pass
+
+    # pyproject.toml — check [project] dependencies and [project.optional-dependencies]
+    pyproject = repo_path / "pyproject.toml"
+    if pyproject.exists():
+        try:
+            content = pyproject.read_text(errors="replace").lower()
+            for pkg in _SERVICE_PACKAGES:
+                if pkg in content:
+                    return True
+        except Exception:
+            pass
+
+    # --- 2. Source patterns in conftest.py and test files ---
+    # Conftest first — service fixtures live there most often
+    test_files: list[Path] = []
+    for conftest in repo_path.rglob("conftest.py"):
+        test_files.insert(0, conftest)     # prioritise conftests
+    for tf in repo_path.rglob("test_*.py"):
+        test_files.append(tf)
+    for tf in repo_path.rglob("*_test.py"):
+        test_files.append(tf)
+
+    compiled = [re.compile(p, re.IGNORECASE) for p in _SERVICE_PATTERNS]
+    sqlite_re = re.compile(_SQLITE_ONLY_RE, re.IGNORECASE)
+
+    for path in test_files:
+        try:
+            source = path.read_text(errors="replace")
+        except Exception:
+            continue
+        for pattern in compiled:
+            if pattern.search(source):
+                # create_engine with sqlite is acceptable
+                if "create_engine" in pattern.pattern and sqlite_re.search(source):
+                    continue
+                return True
+
+    return False
+
 
 def check_repo(repo: dict, local_path: Path) -> tuple[bool, str]:
     """Returns (passes, status_message). Requires MIN_TESTS passing tests."""
@@ -192,12 +324,27 @@ def load_seen() -> set:
     return seen
 
 
+def load_candidates(path: str) -> list[dict]:
+    """Load a pre-built candidates JSONL (from search_repos.py)."""
+    candidates = []
+    with open(path) as f:
+        for line in f:
+            try:
+                candidates.append(json.loads(line))
+            except json.JSONDecodeError:
+                pass
+    return candidates
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--target", type=int, default=50, help="Target number of passing repos")
     parser.add_argument("--workers", type=int, default=4, help="Parallel scan workers")
     parser.add_argument("--stars-min", type=int, default=200)
     parser.add_argument("--stars-max", type=int, default=10000)
+    parser.add_argument("--candidates", help="Pre-built candidates JSONL from search_repos.py")
+    parser.add_argument("--no-network-deps", action="store_true",
+                        help="Skip repos whose tests need external services (DB, Redis, S3, etc.)")
     args = parser.parse_args()
 
     REPOS.mkdir(parents=True, exist_ok=True)
@@ -218,38 +365,53 @@ def main():
 
     passing_count = [n_passing]
 
-    def fetch_candidates():
-        """Producer: rotates high-signal queries to find repos that actually use pytest."""
-        # High-signal queries: repos that self-identify as pytest users or mention pytest explicitly
-        queries = [
-            f"topic:pytest language:python stars:{args.stars_min}..{args.stars_max} is:public archived:false",
-            f"topic:testing language:python stars:{args.stars_min}..{args.stars_max} is:public archived:false",
-            f"pytest in:readme language:python stars:{args.stars_min}..2000 is:public archived:false",
-            f"pytest in:readme language:python stars:2001..{args.stars_max} is:public archived:false",
-            f"topic:unit-testing language:python stars:{args.stars_min}..{args.stars_max} is:public archived:false",
+    if args.candidates:
+        # Pre-built candidate list — load directly, no live search needed
+        all_candidates = [
+            r for r in load_candidates(args.candidates)
+            if r["full_name"] not in already_seen
+            and args.stars_min <= r.get("stars", 0) <= args.stars_max
         ]
-        query_idx = 0
-        page = 1
-        while not done.is_set():
-            query = queries[query_idx]
-            with seen_lock:
-                seen_copy = set(already_seen)
-            batch = gh_search(page, query, seen_copy)
-            if not batch:
-                query_idx = (query_idx + 1) % len(queries)
-                page = 1
-                time.sleep(2)
-                continue
-            with q_lock:
-                candidate_q.extend(batch)
-            page += 1
-            time.sleep(1)  # rate limit
+        print(f"Loaded {len(all_candidates)} candidates from {args.candidates}")
+        candidate_q.extend(all_candidates)
+        fetcher = None
+    else:
+        def fetch_candidates():
+            """Producer: rotates high-signal queries to find repos that actually use pytest."""
+            queries = [
+                f"topic:pytest language:python stars:{args.stars_min}..{args.stars_max} is:public archived:false",
+                f"topic:testing language:python stars:{args.stars_min}..{args.stars_max} is:public archived:false",
+                f"pytest in:readme language:python stars:{args.stars_min}..2000 is:public archived:false",
+                f"pytest in:readme language:python stars:2001..{args.stars_max} is:public archived:false",
+                f"topic:unit-testing language:python stars:{args.stars_min}..{args.stars_max} is:public archived:false",
+            ]
+            query_idx = 0
+            page = 1
+            while not done.is_set():
+                query = queries[query_idx]
+                with seen_lock:
+                    seen_copy = set(already_seen)
+                batch = gh_search(page, query, seen_copy)
+                if not batch:
+                    query_idx = (query_idx + 1) % len(queries)
+                    page = 1
+                    time.sleep(2)
+                    continue
+                with q_lock:
+                    candidate_q.extend(batch)
+                page += 1
+                time.sleep(1)
+
+        fetcher = threading.Thread(target=fetch_candidates, daemon=True)
+        fetcher.start()
+        time.sleep(2)  # let fetcher populate queue
 
     def worker():
         while not done.is_set():
-            # Pop a candidate
             with q_lock:
                 if not candidate_q:
+                    if args.candidates:
+                        return   # static list exhausted
                     time.sleep(0.5)
                     continue
                 repo = candidate_q.pop(0)
@@ -259,8 +421,9 @@ def main():
                     continue
                 already_seen.add(repo["full_name"])
 
-            # Pre-check: skip repos with no test files (saves cloning + Docker overhead)
-            if not has_pytest(repo):
+            # Pre-check: skip repos with no test files.
+            # has_conftest=True means search_repos.py already confirmed conftest.py exists.
+            if not repo.get("has_conftest") and not has_pytest(repo):
                 continue
 
             # Clone
@@ -269,14 +432,18 @@ def main():
                 print(f"  CLONE FAIL  {repo['full_name']}", flush=True)
                 continue
 
+            # Service filter — cheap static scan, avoids Docker startup for rejected repos
+            if args.no_network_deps and needs_external_services(local_path):
+                shutil.rmtree(local_path, ignore_errors=True)
+                print(f"  needs service                  {repo['full_name']}", flush=True)
+                continue
+
             repo["local_path"] = str(local_path)
 
-            # Record in meta regardless of outcome
             with out_lock:
                 with open(META, "a") as f:
                     f.write(json.dumps(repo) + "\n")
 
-            # Scan
             passes, status = check_repo(repo, local_path)
             print(f"  {status:30s} {repo['full_name']}", flush=True)
 
@@ -290,13 +457,7 @@ def main():
                 if n >= args.target:
                     done.set()
             else:
-                # Delete immediately — don't waste disk
                 shutil.rmtree(local_path, ignore_errors=True)
-
-    fetcher = threading.Thread(target=fetch_candidates, daemon=True)
-    fetcher.start()
-
-    time.sleep(2)  # let fetcher populate queue
 
     threads = [threading.Thread(target=worker, daemon=True) for _ in range(args.workers)]
     for t in threads:

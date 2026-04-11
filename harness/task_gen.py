@@ -15,6 +15,7 @@ pytest can collect and run tests.
 import random
 import re
 import shutil
+import subprocess
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -37,6 +38,12 @@ class GeneratedTask:
     mutation: Mutation = None
     mutated_file: str = ""        # relative path of mutated file
     failing_tests: list[str] = field(default_factory=list)
+    repo_commit: str = ""         # git SHA of the cloned repo (for RL replay)
+    mutation_patch: str = ""      # unified diff: original → mutated (for RL replay)
+    # Snapshot of test file contents at task creation time.
+    # Restored before validation to prevent the agent from gaming the reward
+    # by modifying tests. Keys are relative paths (str), values are file contents.
+    test_snapshots: dict = field(default_factory=dict)
 
     def setup(self, sandbox_dir: str) -> None:
         """Copy the mutated repo into sandbox_dir."""
@@ -46,7 +53,33 @@ class GeneratedTask:
         shutil.copytree(self.repo_path, dest, symlinks=True)
 
     def validate(self, sandbox, answer: str | None) -> bool:
-        """Run pytest in the sandbox. Pass iff all tests pass."""
+        """Run pytest in the sandbox. Pass iff all tests pass and no test files were touched.
+
+        Penalizes test tampering: if the agent modified any test file the task
+        fails immediately, regardless of whether pytest would pass.
+        Restores test files before running pytest so the reward is always based
+        on the original test suite.
+        """
+        root = sandbox.repo_path
+        # Check for tampering: modified or new test files both count as cheating
+        known = set(self.test_snapshots)
+        for pat in ("test_*.py", "*_test.py", "conftest.py"):
+            for tf in root.rglob(pat):
+                rel = str(tf.relative_to(root))
+                if rel not in known:
+                    return False  # penalty: agent created a new test file
+                try:
+                    if tf.read_text(errors="replace") != self.test_snapshots[rel]:
+                        return False  # penalty: agent modified an existing test file
+                except Exception:
+                    pass
+        # Restore snapshot so pytest runs against original tests
+        for rel, content in self.test_snapshots.items():
+            target = root / rel
+            try:
+                target.write_text(content)
+            except Exception:
+                pass
         result = sandbox.bash(
             ".venv/bin/python -m pytest --tb=no -q --continue-on-collection-errors 2>&1 | tail -1",
             timeout=60,
@@ -173,13 +206,27 @@ def generate_tasks(
     max_attempts: int = 50,
     seed: int | None = None,
     sandbox_image: str = SANDBOX_IMAGE,
+    sandbox_class=None,
 ) -> list[GeneratedTask]:
     """
     Generate up to n_tasks fix-the-bug tasks from a repo.
-    Runs pytest inside a Docker sandbox so deps are available.
+
+    sandbox_class: Sandbox (Docker, default) or LocalSandbox (subprocess, for Modal).
     """
+    import difflib
+    if sandbox_class is None:
+        sandbox_class = Sandbox
+
     repo_path = Path(repo_path).resolve()
     rng = random.Random(seed)
+
+    # Capture git commit for RL replay
+    try:
+        repo_commit = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=str(repo_path), text=True,
+        ).strip()
+    except Exception:
+        repo_commit = ""
 
     py_files = _find_py_files(repo_path)
     if not py_files:
@@ -189,7 +236,7 @@ def generate_tasks(
 
     # One sandbox for the whole repo — install deps once, reuse
     try:
-        with Sandbox(repo_path=repo_path, image=sandbox_image) as sb:
+        with sandbox_class(repo_path=repo_path, image=sandbox_image) as sb:
             _install_deps(sb)
 
             # Verify baseline: repo must have passing tests
@@ -232,6 +279,24 @@ def generate_tasks(
                 # Apply mutation to snapshot (clean repo was restored above)
                 (snapshot_dir / rel_path).write_text(mutation.mutated)
 
+                # Capture test file contents from the clean repo (before the agent
+                # runs) so validate() can restore them and prevent test tampering.
+                test_snapshots: dict[str, str] = {}
+                for pat in ("test_*.py", "*_test.py", "conftest.py"):
+                    for tf in repo_path.rglob(pat):
+                        rel = str(tf.relative_to(repo_path))
+                        try:
+                            test_snapshots[rel] = tf.read_text(errors="replace")
+                        except Exception:
+                            pass
+
+                mutation_patch = "".join(difflib.unified_diff(
+                    mutation.original.splitlines(keepends=True),
+                    mutation.mutated.splitlines(keepends=True),
+                    fromfile=f"a/{rel_path}",
+                    tofile=f"b/{rel_path}",
+                ))
+
                 task = GeneratedTask(
                     name=f"{repo_path.name}__{rel_path.stem}__{mutation.kind}",
                     repo_path=str(snapshot_dir),
@@ -239,6 +304,9 @@ def generate_tasks(
                     mutation=mutation,
                     mutated_file=str(rel_path),
                     failing_tests=failing_tests,
+                    repo_commit=repo_commit,
+                    mutation_patch=mutation_patch,
+                    test_snapshots=test_snapshots,
                 )
                 tasks.append(task)
                 attempts += 1

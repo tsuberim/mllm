@@ -53,13 +53,22 @@ Two-phase curriculum: 80B general pre-training → 20B protocol-heavy warmup (tr
 - `01_filter.py` — per-source quality filtering: Python (AST parse + must have def/class), Bash (≥2 commands), Markdown (English-only, no templates)
 - `02_dedup.py` — MinHash LSH deduplication
 - `03_train_tokenizer.py` — BPE tokenizer in Rust (HF tokenizers), 32K vocab, 20 special tokens: `<|bos|>` `<|eos|>` + 18 agent protocol tokens (see `harness/protocol.py`). Fresh training produces vocab_size=32020. `--patch <tokenizer.json>` adds missing tokens to an existing tokenizer without retraining BPE.
-- `04_generate_traces.py` — synthetic trace generation via Qwen2.5-Coder-32B (TBD)
-- `04_validate_traces.py` — Docker sandbox replay validation (TBD)
+- `04_fetch_repos.py` — two-step repo harvesting: `search` (GitHub API → candidates JSONL) + `scan` (clone + service-dep filter + pytest → passing JSONL)
 - `05_tokenize.py` — apply tokenizer, pack into 6K-token chunks, write uint16 .bin files
+
+**Agentic trace pipeline** (separate from pretraining corpus):
+- Step 1 — `04_fetch_repos.py search` → `data/repos/candidates.jsonl` (target: 50k repos)
+- Step 2 — `modal run modal_app.py::scan_repos` → `data/repos/passing.jsonl` (target: 20k passing)
+- Step 3 — `modal run modal_app.py::generate_task_dataset` → `data/tasks/tasks.jsonl` + `data/repos/zips/` (20 mutations/repo; zips stored on Modal volume for trace gen)
+- Step 4 — `modal run modal_app.py::generate_traces` (TBD) → `data/traces/traces.jsonl`
+
+**Task dataset schema** (`data/tasks/tasks.jsonl`): `id`, `task_name`, `task_category`, `repo`, `repo_commit`, `repo_zip_key`, `repo_stars`, `repo_topics`, `repo_license`, `mutation_kind`, `mutation_description`, `mutated_file`, `mutation_lineno`, `mutation_patch`, `failing_tests`, `n_failing_tests`, `task`
+
+**Trace dataset schema** (`data/traces/traces.jsonl`): task fields + `trace_sft`, `trace_full`, `n_tokens_sft`, `n_tokens_full`, `n_tool_calls`, `duration_s`
 
 ## Infrastructure
 
-- **Persistent volume**: `/workspace` — mounted on all RunPod pods and serverless workers. Holds training data, checkpoints, HF dataset/model cache (`/workspace/hf_cache`), and Triton/Inductor compile cache (`/workspace/torch_cache`). Do not use `/vol`.
+- **Persistent volume**: `merlin-data` Modal volume, mounted at `/data` — holds tokenized corpus, checkpoints, HF cache (`/data/cache/hf`), Inductor cache (`/data/cache/inductor`), repo zips (`/data/repos/zips/`).
 
 ## Stack
 
@@ -89,16 +98,18 @@ Update benchmarks whenever a new optimisation is measured. Update planned-work s
 
 | Milestone | Status | Notes |
 |---|---|---|
-| 1. Agentic trace research | ✅ Done | Research complete; deferred to later session |
-| 2. Agentic harness | ✅ Done | Protocol defined; 16 special tokens; feasibility harness at 47% on 49 tasks |
-| 3. Agentic trace generation | ⏸ Deferred | Harness + tokenizer done; separate session |
-| 4. Tokenizer training | ✅ Done (v0) | 32016 vocab (32K BPE + 16 special); patched to 20 special tokens (32016 IDs, 2 legacy unused); will retrain clean after traces |
-| 5. Data pipeline | ✅ Done | 1.19B tokens; corpus_train.bin + corpus_val.bin; uploaded to HF |
-| 6. Benchmarking | ✅ Done | checkpoint eval (eval_ckpt.py) + release eval (eval.py); integrated into train.py |
-| 7. E2E experiment loop | ✅ Done | H100 runs via Modal; 330M experiment model; baseline-330m running (batch=40, 6500 steps) |
-| 8. Full corpus pipeline | ⏸ Not started | Parallelized download, fast dedup, multiprocess tokenization; target ~100B tokens |
-| 9. Full 3B run | ⏸ Not started | Multi-GPU DDP, long-running Modal job; blocked on milestone 8 |
-| 10. Post-training | ⏸ Not started | SFT → RL → thinking fusion (conditional); blocked on milestones 3 + 9 |
+| 1. Agentic trace research | ✅ Done | Research complete |
+| 2. Agentic harness | ✅ Done | Protocol defined; 20 special tokens; feasibility harness at 47% on 49 tasks; LocalSandbox for Modal |
+| 3a. Task dataset (CPU) | 🔄 In progress | Repo search + Modal scan working (227 passing from 2185 candidates); mutation pipeline built; target 20k repos × 20 mutations |
+| 3b. Trace generation (GPU) | ⏸ Blocked on 3a | Qwen on vLLM; target ~200K successful traces |
+| 4. Tokenizer training | ✅ Done (v0) | 32016 vocab; will retrain clean after traces |
+| 5. Data pipeline | ✅ Done | 1.19B tokens; corpus_train.bin + corpus_val.bin on HF |
+| 6. Benchmarking | ✅ Done | checkpoint + release eval integrated into train.py |
+| 7. E2E experiment loop | ✅ Done | H100 via Modal; 330M model; baseline running |
+| 8. Full corpus pipeline | ⏸ Not started | ~100B tokens; blocked on nothing — can run in parallel |
+| 9. Full 3B run | ⏸ Not started | Blocked on milestone 8 |
+| 10. Post-training | ⏸ Not started | SFT → RL → thinking fusion; blocked on 3b + 9 |
+| 10a. SFT infra | ✅ Done | sft.py + 06_prepare_sft.py + Modal; validated on 330M with CodeAlpaca proxy; swap in real traces when ready |
 
 **Data state:**
 - `data/raw/` — 1M Python + 250K Bash + 200K Markdown + 7K tldr
@@ -113,7 +124,9 @@ Update benchmarks whenever a new optimisation is measured. Update planned-work s
 
 2. **Agentic harness** *(blocks trace generation)* — research and solidify the agent protocol (tool call format, special tokens, sandbox interface); implement sandbox infra reused for both trace generation and inference; this is the shared contract everything else builds on.
 
-3. **Agentic trace generation** *(blocked by 2)* — implement generation pipeline (vLLM + async sandbox workers + task queue); run at scale on parallelized H100 fleet; filter to successful, coherent traces only.
+3a. **Task dataset** *(CPU, in progress)* — gather 50k candidate repos via GitHub search; scan on Modal CPU for passing pytest suites (target: 20k passing); generate 20 AST mutations per repo (6 mutation types); zip each repo and store on Modal volume; output `data/tasks/tasks.jsonl`. Schema includes `repo_commit`, `repo_zip_key`, `mutation_patch`, `test_snapshots` (for tamper-proof RL validation).
+
+3b. **Trace generation** *(GPU, blocked by 3a)* — run Qwen2.5-Coder-32B on task dataset via vLLM; unzip repo + apply mutation patch per task; generate agentic traces; filter to successful; output `data/traces/traces.jsonl` with `trace_sft` + `trace_full`. Target: ~200K successful traces (~500M tokens).
 
 4. **Tokenizer training** *(blocked by 3)* — train BPE tokenizer on final corpus including agentic traces; 32K vocab; special tokens for agent protocol; validate compression ratio on held-out traces.
 
