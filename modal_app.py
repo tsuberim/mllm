@@ -55,11 +55,11 @@ INDUCTOR_CACHE = f"{DATA_ROOT}/cache/inductor"
 def train(
     commit: str,
     model: str = "experiment",
-    batch_size: int = 32,        # representative of 3B training
-    max_steps: int = 15000,      # ~2.8 epochs at batch=32 over 173K chunks
-    val_every: int = 1000,
+    batch_size: int = 8,         # matches 3B training batch size
+    max_steps: int = 65000,      # ~3 epochs at batch=8 over 173K chunks
+    val_every: int = 5000,
     val_steps: int = 10,
-    save_every: int = 5000,
+    save_every: int = 20000,
     bf16: bool = True,
     grad_checkpoint: bool = False,
     lr_min: float = 0.0,
@@ -170,11 +170,11 @@ def upload_corpus():
 def main(
     commit: str = "",
     model: str = "experiment",
-    batch_size: int = 32,
-    max_steps: int = 15000,
-    val_every: int = 1000,
+    batch_size: int = 8,
+    max_steps: int = 65000,
+    val_every: int = 5000,
     val_steps: int = 5,
-    save_every: int = 5000,
+    save_every: int = 20000,
     bf16: bool = True,
     grad_checkpoint: bool = False,
     lr_min: float = 0.0,
