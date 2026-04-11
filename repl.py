@@ -27,18 +27,20 @@ WEIGHTS_CACHE  = Path("checkpoints/weights")   # local cache for converted .npz 
 # ── weight conversion ─────────────────────────────────────────────────────────
 
 def _convert(pt_path: Path, out_path: Path):
-    """Convert PyTorch checkpoint → MLX .npz (fp32 numpy arrays)."""
+    """Convert PyTorch checkpoint → MLX .npz (fp16 numpy arrays)."""
     import torch
     print(f"converting {pt_path.name} → {out_path.name} ...")
     ckpt = torch.load(pt_path, map_location="cpu", weights_only=False)
     sd   = ckpt["model"]
+    del ckpt  # free wrapper early — peak = checkpoint + arrays, not ×2 in fp32
 
     arrays = {}
     for k, v in sd.items():
         k = k.removeprefix("_orig_mod.")
         if "rope_cos" in k or "rope_sin" in k:
             continue
-        arrays[k] = v.float().numpy()
+        arrays[k] = v.half().numpy()  # bf16→fp16: 6 GB instead of 12 GB
+    del sd
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     np.savez(str(out_path), **arrays)
