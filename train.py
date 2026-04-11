@@ -35,10 +35,10 @@ parser.add_argument("--grad_clip",  type=float, default=1.0)
 parser.add_argument("--wandb",      choices=["online", "disabled"], default="online")
 parser.add_argument("--bf16",             action="store_true", help="cast model to bfloat16 (required for ~7B on single GPU)")
 parser.add_argument("--grad_checkpoint",  action="store_true", help="gradient checkpointing (saves activation memory; enables large batches on big models)")
-parser.add_argument("--grad_norm_ema",    type=float, default=0.0,
-                    help="EMA alpha for per-chunk grad-norm weighting (0 = disabled). "
-                         "Maintains a per-training-chunk EMA of batch grad norm; "
-                         "uses it for both importance sampling and per-sample loss weighting.")
+parser.add_argument("--ema_halflife",     type=float, default=0.0,
+                    help="Half-life in dataset epochs for per-chunk grad-norm importance sampling "
+                         "(0 = disabled). Alpha is computed as 0.5^(1/halflife), so the meaning "
+                         "is scale-invariant across dataset sizes, batch sizes, and step counts.")
 parser.add_argument("--resume",       action="store_true", help="resume from existing checkpoint")
 parser.add_argument("--tag",          type=str, default=None, help="tag for HF checkpoint filename (default: model name)")
 args = parser.parse_args()
@@ -131,10 +131,20 @@ def _val_prompts(n: int, prompt_tokens: int, continuation_tokens: int) -> list[t
             i += 1
     return prompts
 
-# per-chunk EMA of batch grad norm — used for importance sampling + loss weighting
-# initialised to 1.0 (above real grad norm ~0.2–0.7) so all chunks are
-# sampled uniformly until first visited, then EMA decays toward actual grad norm.
-# capped at 1.0 to prevent runaway concentration on noisy outlier chunks.
+# per-chunk EMA of batch grad norm — importance sampling weights
+# alpha derived from halflife in epochs: alpha = 0.5^(1/halflife)
+# init=1.0 > typical grad norm (~0.3-0.5) so all chunks sampled uniformly until visited
+# capped at 1.0 so chunks can only decay downward from init
+_alpha_ema = 0.0
+if args.ema_halflife > 0:
+    # stabilize_visits = 3-4 → half-life ≈ 2 epochs → alpha = 0.5^(1/2) ≈ 0.707
+    # after 3 visits: weight of init = alpha^3 ≈ 0.35 (mostly replaced by observations)
+    # after 4 visits: weight of init = alpha^4 ≈ 0.25 (well stabilized)
+    _alpha_ema = 0.5 ** (1.0 / args.ema_halflife)
+    _total_epochs = args.max_steps * args.batch_size / len(train_data)
+    _visits_to_stabilize = -3.0 / np.log2(_alpha_ema)  # visits until init weight < 12.5%
+    print(f"[ema] halflife={args.ema_halflife} epochs  alpha={_alpha_ema:.4f}  "
+          f"total_epochs={_total_epochs:.1f}  stabilizes_after={_visits_to_stabilize:.1f} visits")
 sample_ema = np.ones(len(train_data), dtype=np.float32)
 
 SAMPLE_PROMPTS = _val_prompts(N_SAMPLE_PROMPTS, PROMPT_TOKENS, SAMPLE_NEW)
@@ -272,7 +282,7 @@ for step in pbar:
     set_lr([optim_adam, optim_muon], [lr_now, lr_muon_now])
 
     model.train()
-    ema_weights = sample_ema / sample_ema.sum() if args.grad_norm_ema > 0 else None
+    ema_weights = sample_ema / sample_ema.sum() if _alpha_ema > 0 else None
     x, y, ix = get_batch(train_data, args.batch_size, model_cfg.block_size, weights=ema_weights)
     with autocast:
         _, loss = model(x, y)
@@ -283,10 +293,9 @@ for step in pbar:
     grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip).item()
     optim_muon.step()
     optim_adam.step()
-    if args.grad_norm_ema > 0:
-        alpha = args.grad_norm_ema
+    if _alpha_ema > 0:
         ix_np = ix.numpy()
-        sample_ema[ix_np] = np.minimum(alpha * sample_ema[ix_np] + (1 - alpha) * grad_norm, 1.0)
+        sample_ema[ix_np] = np.minimum(_alpha_ema * sample_ema[ix_np] + (1 - _alpha_ema) * grad_norm, 1.0)
 
     log = {"train/loss": loss.item(), "train/grad_norm": grad_norm,
            "train/lr": lr_now, "train/lr_muon": lr_muon_now}
@@ -306,7 +315,7 @@ for step in pbar:
 
         log["val/loss"] = val_loss
         log["samples"]  = tbl
-        if args.grad_norm_ema > 0:
+        if _alpha_ema > 0:
             p = sample_ema / sample_ema.sum()
             neff = float(1.0 / (len(p) * np.dot(p, p)))  # 1.0 = uniform, 0 = collapsed
             log["data/ema_neff"]  = neff
