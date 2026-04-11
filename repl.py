@@ -27,23 +27,26 @@ WEIGHTS_CACHE  = Path("checkpoints/weights")   # local cache for converted .npz 
 # ── weight conversion ─────────────────────────────────────────────────────────
 
 def _convert(pt_path: Path, out_path: Path):
-    """Convert PyTorch checkpoint → MLX .npz (fp16 numpy arrays)."""
-    import torch
+    """Convert PyTorch checkpoint → MLX .npz, streaming one tensor at a time.
+
+    Peak memory = checkpoint size only (~6 GB for 3B bf16).
+    Each tensor is written to the zip and freed before the next is loaded.
+    """
+    import io, zipfile, torch
     print(f"converting {pt_path.name} → {out_path.name} ...")
     ckpt = torch.load(pt_path, map_location="cpu", weights_only=False)
     sd   = ckpt["model"]
-    del ckpt  # free wrapper early — peak = checkpoint + arrays, not ×2 in fp32
-
-    arrays = {}
-    for k, v in sd.items():
-        k = k.removeprefix("_orig_mod.")
-        if "rope_cos" in k or "rope_sin" in k:
-            continue
-        arrays[k] = v.half().numpy()  # bf16→fp16: 6 GB instead of 12 GB
-    del sd
+    del ckpt
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    np.savez(str(out_path), **arrays)
+    with zipfile.ZipFile(str(out_path), "w", compression=zipfile.ZIP_STORED) as zf:
+        for k, v in sd.items():
+            k = k.removeprefix("_orig_mod.")
+            if "rope_cos" in k or "rope_sin" in k:
+                continue
+            buf = io.BytesIO()
+            np.lib.format.write_array(buf, v.half().numpy())
+            zf.writestr(k + ".npy", buf.getvalue())
     print(f"  saved {out_path}")
 
 
