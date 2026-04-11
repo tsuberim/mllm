@@ -158,11 +158,14 @@ def _load_base():
         except Exception as e:
             print(f"WARNING: could not load base checkpoint ({e}); training from scratch")
     if ckpt:
-        missing, unexpected = model.load_state_dict(ckpt["model"], strict=False)
-        if missing:
-            print(f"  missing keys: {missing}")
-        if unexpected:
-            print(f"  unexpected keys: {unexpected}")
+        try:
+            missing, unexpected = model.load_state_dict(ckpt["model"], strict=False)
+            if missing:
+                print(f"  missing keys ({len(missing)}): {missing[:3]}{'...' if len(missing)>3 else ''}")
+            if unexpected:
+                print(f"  unexpected keys ({len(unexpected)}): {unexpected[:3]}{'...' if len(unexpected)>3 else ''}")
+        except RuntimeError as e:
+            print(f"WARNING: checkpoint shape mismatch — starting from scratch. ({e})"[:200])
 
 
 _load_base()
