@@ -1,57 +1,100 @@
-# Merlin
+# Merlin — Specialized Agentic Coding Model
 
-An efficient small language model built from scratch for local inference on Apple Silicon — 7B Pro and 3B.
+A 3B language model built from scratch **exclusively** for agentic coding — not a general assistant, not a fine-tuned GPT. Every training token, every design decision, every protocol token is optimized for one job: executing code tasks fast, locally, and at scale.
 
-Educational in spirit, but aimed at being genuinely useful and open source.
+Runs on any MacBook. No API key. Your code never leaves your machine.
 
-## Goals
+→ **[tsuberim.github.io/merlin](https://tsuberim.github.io/merlin/)**
 
-- Maximize inference TPS and minimize memory on Apple Silicon (Mac + 3B)
-- Train from scratch on real data
-- Custom Metal kernels — no relying on framework defaults
-- 3B target: model fits within ~4 GB RAM via int4 quantization
+## The Idea
 
-## Benchmarks
+LLM agents spend most of their tokens on execution, not reasoning — grep a file, run a test, rename a function. Today that all hits a frontier model at $1–10/M tokens.
 
-Base model (~117M params) on M4 7B Pro:
+Merlin is the brute-force execution layer beneath a smarter orchestrator. A frontier model (Claude, GPT-4) plans; Merlin executes — locally, in parallel, at zero marginal cost.
 
-| Setup | TPS | Peak Memory |
+| Mode | Workers | Cost |
 |---|---|---|
-| fp32, no KV cache | 38.7 | 1536 MB |
-| fp32 + KV cache | 242.6 | 802 MB |
-| **int4 + KV cache** | **625.3** | **188 MB** |
+| Local | 1, on your MacBook | $0 — always |
+| Hosted | 100–1000 via GPU batching | pay-per-task |
 
-int4 + KV cache hits 625 TPS at 188 MB — well within 3B's ~4 GB budget.
+## Design
+
+| Choice | What | Why |
+|---|---|---|
+| Pre-trained from scratch | 100B tokens — code, bash, agentic traces, commits | No proprietary distillation; weights are commercially clean |
+| Custom tokenizer | 32K BPE + 18 agent protocol special tokens | Tool-call protocol is first-class, not bolted on |
+| 6K context window | Sized for one large Python file + agent overhead | Not a general-purpose model |
+| RL post-training | GRPO on verifiable bash/filesystem rewards | Ground truth without a judge model |
+| MLX int4 inference | ~1.5 GB weights, >500 tok/s on M3 | Fits any M-series Mac |
+
+## Agent Protocol
+
+18 special tokens define the tool-call format — the model learns to emit and parse tool calls natively:
+
+```
+<|task|> Read src/main.py and return the function names.
+<|think|> I need to read the file first.<|/think|>
+<|tool_call|><|tool_name|>read_file<|tool_args|>{"path": "src/main.py"}<|/tool_call|>
+<|tool_result|>def train(): ...\ndef evaluate(): ...<|/tool_result|>
+<|answer|> train, evaluate
+```
 
 ## Architecture
 
-GPT-style decoder-only transformer with four configs:
+GPT-style decoder-only. RMSNorm, SwiGLU, GQA (n_kv_head=8), no bias, weight tying, pre-norm.
 
 | Config | Params | n_embd | n_head | n_layer | block_size |
 |---|---|---|---|---|---|
-| sanity | ~1.6M | 32 | 2 | 2 | 64 |
-| experiment | ~21M | 256 | 8 | 8 | 512 |
-| 3b | ~3.17B | 3072 | 24 | 20 | 4096 |
-| 7b | ~7.19B | 4096 | 32 | 26 | 4096 |
+| tiny | ~1.6M | 32 | 2 | 2 | 64 |
+| medium | ~21M | 256 | 8 | 8 | 512 |
+| base (330M) | ~330M | 1024 | 16 | 16 | 2048 |
+| **3b** | **~3.17B** | **3072** | **24** | **20** | **4096** |
 
-Key design choices:
-- **RMSNorm** — faster, no mean subtraction
-- **SwiGLU MLP** — better loss/param ratio vs GELU
-- **Weight tying** — tok_emb and head share weights; saves ~39M params on base
-- **No bias** on linear layers
-- **Pre-norm** — more stable training
+## Corpus
+
+~100B tokens across 7 sources. Two-phase curriculum: 80B general mix → 20B upweighted traces + instruction data.
+
+| Source | Share |
+|---|---|
+| Stack v2 — Python | ~38% |
+| Stack v2 — Bash / Markdown | ~8% |
+| Agentic traces (synthetic) | ~15% |
+| GitHub commits + issues | ~11% |
+| Stack Overflow | ~10% |
+| Math + instruction mix | ~12% |
+| tldr pages | <1% |
+
+v0 corpus (1.19B tokens): [tsuberim/merlin-corpus-v0](https://huggingface.co/datasets/tsuberim/merlin-corpus-v0)
+Tokenizer: [tsuberim/merlin-tokenizer-v0](https://huggingface.co/tsuberim/merlin-tokenizer-v0)
+
+## Status
+
+| Milestone | Status |
+|---|---|
+| Agentic protocol + eval harness (49 tasks, 47% on 3B baseline) | ✅ Done |
+| Custom BPE tokenizer (32K vocab, 20 special tokens) | ✅ Done |
+| Data pipeline (download → tokenize → pack) | ✅ Done |
+| v0 corpus on HuggingFace (1.19B tokens) | ✅ Done |
+| E2E training loop, 330M model on H100 | ✅ Done |
+| SFT infrastructure | ✅ Done |
+| Repo scanning pipeline (clone + pytest → passing repos) | 🔄 In progress |
+| Agentic trace generation (target: 200K traces) | ⏸ Planned |
+| Full 100B token corpus | ⏸ Planned |
+| 3B pre-training run | ⏸ Planned |
+| RL post-training (GRPO on verifiable rewards) | ⏸ Planned |
+| MLX int4 3B model release | ⏸ Planned |
 
 ## Stack
 
 | Role | Tool |
 |---|---|
-| Training | PyTorch + CUDA + Triton (NVIDIA) |
-| Inference (Mac) | MLX + custom Metal kernels |
-| Inference (3B) | CoreML (planned) |
-| Data | TinyStories via tiktoken GPT-2 |
+| Training | PyTorch + CUDA (NVIDIA H100) |
+| Inference | MLX (Apple Silicon / Metal) |
+| Cloud compute | Modal |
+| Tokenizer | HuggingFace tokenizers (BPE, Rust) |
+| Trace generation | vLLM + Qwen2.5-Coder-32B |
 | Observability | W&B |
-
-PyTorch is the source of truth. MLX is inference-only with custom kernels. Weight conversion is explicit and parity-tested.
+| Datasets + models | HuggingFace Hub |
 
 ## Setup
 
@@ -59,50 +102,6 @@ PyTorch is the source of truth. MLX is inference-only with custom kernels. Weigh
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 ```
-
-## Training
-
-```sh
-# Sanity check (2 steps, ~seconds)
-./train_sanity.sh
-
-# Local experiment (2000 steps, ~10 min on MPS)
-./train_experiment.sh
-
-# 3B scale (requires NVIDIA)
-./train_3b.sh
-```
-
-## Inference
-
-```sh
-# Convert latest checkpoint and sample
-./sample.sh
-
-# Benchmark quantization levels
-python bench.py
-```
-
-## Project Layout
-
-```
-model.py      — PyTorch transformer (training)
-infer.py      — MLX inference with KV cache + int4 quant + custom kernels
-train.py      — Training loop (AdamW, grad clipping, W&B, HF Hub checkpoints)
-data.py       — TinyStories tokenization → memmap
-convert.py    — PyTorch → MLX weight conversion
-bench.py      — TPS and memory benchmarks
-test_e2e.py   — PyTorch/MLX parity tests (atol=1e-6, greedy token matching)
-docs/         — Architecture, stack, training, inference docs
-```
-
-## Planned
-
-- Muon optimizer (Newton-Schulz orthogonalised momentum)
-- Tiled int4 matmul Metal kernel (3–5× speedup potential)
-- Separate prefill / decode kernels (different optimal tiling per phase)
-- RoPE (replace learned positional embeddings)
-- CoreML export for 3B deployment
 
 ## License
 
