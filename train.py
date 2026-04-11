@@ -297,7 +297,8 @@ for step in pbar:
     optim_adam.step()
     if _alpha_ema > 0:
         ix_np = ix.numpy()
-        sample_ema[ix_np] = np.minimum(_alpha_ema * sample_ema[ix_np] + (1 - _alpha_ema) * grad_norm, 1.0)
+        updated = _alpha_ema * sample_ema[ix_np] + (1 - _alpha_ema) * grad_norm
+        sample_ema[ix_np] = np.clip(updated, 0.1, 1.0)  # floor at 0.1 to prevent starvation
 
     log = {"train/loss": loss.item(), "train/grad_norm": grad_norm,
            "train/lr": lr_now, "train/lr_muon": lr_muon_now}
