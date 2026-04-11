@@ -74,16 +74,24 @@ INDUCTOR_CACHE = f"{DATA_ROOT}/cache/inductor"
 
 def _checkout(commit: str) -> str:
     """Clone repo at commit into /tmp/<commit>. Idempotent."""
+    import shutil
     repo_dir = f"/tmp/{commit}"
     if not os.path.exists(f"{repo_dir}/.git"):
-        subprocess.run(
-            ["git", "clone", "--quiet", "--filter=blob:none", "--no-checkout", REPO_URL, repo_dir],
-            check=True,
+        # Remove stale/partial directory if present
+        if os.path.exists(repo_dir):
+            shutil.rmtree(repo_dir)
+        result = subprocess.run(
+            ["git", "clone", "--filter=blob:none", "--no-checkout", REPO_URL, repo_dir],
+            capture_output=True, text=True,
         )
-    subprocess.run(
-        ["git", "-C", repo_dir, "checkout", "--quiet", "--detach", commit],
-        check=True,
+        if result.returncode != 0:
+            raise RuntimeError(f"git clone failed:\n{result.stderr}")
+    result = subprocess.run(
+        ["git", "-C", repo_dir, "checkout", "--detach", commit],
+        capture_output=True, text=True,
     )
+    if result.returncode != 0:
+        raise RuntimeError(f"git checkout failed:\n{result.stderr}")
     return repo_dir
 
 
