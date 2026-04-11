@@ -31,6 +31,11 @@
 
 - **Grad-norm-based source weighting** — sample training sources proportional to per-source EMA of gradient norm (already computed for grad clipping, zero extra cost). Start weights=1 (uniform), converge toward the importance-sampling distribution over time. Theoretically minimises gradient variance (Katharopoulos & Fleuret, ICML 2018). Hypothesis: reduces Python over-representation effect without manual tuning. Test: compare val loss curve and convergence rate vs. fixed source weights on experiment config.
 
+## Post-Training
+
+- [post_training/README.md](post_training/README.md) — three-phase recipe: SFT (traces + instruction mix) → RL (GRPO, verifiable rewards) → thinking fusion SFT; compute estimates, datasets, hyperparams, risks
+- [post_training/experiments.md](post_training/experiments.md) — experiment scope: SFT ablations on 330M, RL sweeps on 3B, thinking binary decision; decision tree and readiness checklists
+
 ## Metal
 
 - [metal/README.md](metal/README.md) — index and overview of the Metal/MLX deep-dive research series

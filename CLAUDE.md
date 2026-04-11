@@ -91,11 +91,14 @@ Update benchmarks whenever a new optimisation is measured. Update planned-work s
 |---|---|---|
 | 1. Agentic trace research | ✅ Done | Research complete; deferred to later session |
 | 2. Agentic harness | ✅ Done | Protocol defined; 16 special tokens; feasibility harness at 47% on 49 tasks |
-| 3. Agentic trace generation | ⏸ Blocked | Needs harness + tokenizer; separate session |
+| 3. Agentic trace generation | ⏸ Deferred | Harness + tokenizer done; separate session |
 | 4. Tokenizer training | ✅ Done (v0) | 32016 vocab (32K BPE + 16 special); patched to 20 special tokens (32016 IDs, 2 legacy unused); will retrain clean after traces |
 | 5. Data pipeline | ✅ Done | 1.19B tokens; corpus_train.bin + corpus_val.bin; uploaded to HF |
 | 6. Benchmarking | ✅ Done | checkpoint eval (eval_ckpt.py) + release eval (eval.py); integrated into train.py |
-| 7. E2E experiment loop | 🔄 In progress | train.py wired to data/tokenized/; model.vocab_size=32016; ready to launch |
+| 7. E2E experiment loop | ✅ Done | H100 runs via Modal; 330M experiment model; baseline-330m running (batch=40, 6500 steps) |
+| 8. Full corpus pipeline | ⏸ Not started | Parallelized download, fast dedup, multiprocess tokenization; target ~100B tokens |
+| 9. Full 3B run | ⏸ Not started | Multi-GPU DDP, long-running Modal job; blocked on milestone 8 |
+| 10. Post-training | ⏸ Not started | SFT → RL → thinking fusion (conditional); blocked on milestones 3 + 9 |
 
 **Data state:**
 - `data/raw/` — 1M Python + 250K Bash + 200K Markdown + 7K tldr
@@ -123,6 +126,19 @@ Update benchmarks whenever a new optimisation is measured. Update planned-work s
    Cost-aware: benchmark cost informs which checks run at which cadence.
 
 7. **E2E experiment loop** — ability to launch a training run locally or remote using real corpus data (not blocked on agentic traces); auto-benchmark each checkpoint; iterate on model config and training recipe.
+
+8. **Full corpus pipeline** *(blocks 9)* — scale data pipeline to ~100B tokens: parallelized shard downloads, distributed MinHash dedup, multiprocess tokenization. Target: corpus_train.bin + corpus_val.bin at full scale uploaded to HF.
+
+9. **Full 3B run** *(blocked by 8)* — train the 3B model on the full corpus; multi-GPU DDP, long-running Modal job (~2 days on 4× H100). Produce a released checkpoint on HF.
+
+10. **Post-training** *(blocked by 3 + 9)* — three-stage recipe on top of the pre-trained 3B checkpoint (see `research/post_training/README.md`):
+    - **SFT** — 70/30 mix of validated agentic traces + code-flavored instruction-following data; response-only loss.
+    - **RL** — GRPO on binary Docker sandbox rewards; curriculum single-step → multi-step; veRL on Modal. Target: >70% pass@1 (vs. 47% feasibility baseline).
+    - **Thinking fusion SFT** — conditional; comes *after* RL (SAIL-RL, 2025). Abort if pass@1 on hard tasks improves <10%.
+
+## Research Ideas
+
+- **Importance sampling** — per-chunk grad-norm EMA as a self-weighting dataset mechanism; validate on 330M experiment model vs baseline; if promising, apply to 3B run with EMA warm-started from experiment run. Potentially publish.
 
 ## Research
 

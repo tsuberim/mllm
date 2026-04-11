@@ -145,7 +145,7 @@ class GPT(nn.Module):
         elif isinstance(m, nn.Embedding):
             nn.init.normal_(m.weight, std=0.02)
 
-    def forward(self, idx, targets=None, attn_mask=None):
+    def forward(self, idx, targets=None, attn_mask=None, loss_mask=None):
         from torch.utils.checkpoint import checkpoint
         B, T = idx.shape
         x = self.tok_emb(idx)
@@ -160,13 +160,31 @@ class GPT(nn.Module):
             # critical for large models where B*T*V can exceed 1.5 GB
             chunk = max(1, T // 4)
             chunks = range(0, T, chunk)
-            loss = sum(
-                F.cross_entropy(
-                    (x[:, i:i+chunk] @ self.head.weight.T).reshape(-1, self.cfg.vocab_size),
-                    targets[:, i:i+chunk].contiguous().reshape(-1),
-                )
-                for i in chunks
-            ) / len(chunks)
+            if loss_mask is None:
+                # pre-training: average over all tokens
+                loss = sum(
+                    F.cross_entropy(
+                        (x[:, i:i+chunk] @ self.head.weight.T).reshape(-1, self.cfg.vocab_size),
+                        targets[:, i:i+chunk].contiguous().reshape(-1),
+                    )
+                    for i in chunks
+                ) / len(chunks)
+            else:
+                # SFT: response-only loss with per-sample normalization.
+                # collect per-token CE across all chunks, then normalize by
+                # response-token count per sample (not total tokens).
+                per_tok = []
+                for i in chunks:
+                    logits_c = x[:, i:i+chunk] @ self.head.weight.T  # [B, c, V]
+                    ce_c = F.cross_entropy(
+                        logits_c.reshape(-1, self.cfg.vocab_size),
+                        targets[:, i:i+chunk].contiguous().reshape(-1),
+                        reduction="none",
+                    ).reshape(B, -1)  # [B, c]
+                    per_tok.append(ce_c)
+                per_tok = torch.cat(per_tok, dim=1)          # [B, T]
+                n_resp  = loss_mask.float().sum(dim=1).clamp(min=1)   # [B]
+                loss    = ((per_tok * loss_mask.float()).sum(dim=1) / n_resp).mean()
             return None, loss
         logits = self.head(x)
         return logits, None
