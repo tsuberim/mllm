@@ -298,7 +298,7 @@ for step in pbar:
     if _alpha_ema > 0:
         ix_np = ix.numpy()
         updated = _alpha_ema * sample_ema[ix_np] + (1 - _alpha_ema) * grad_norm
-        sample_ema[ix_np] = np.clip(updated, 0.1, 1.0)  # floor at 0.1 to prevent starvation
+        sample_ema[ix_np] = np.clip(updated, 0.01, 1.0)  # floor at 1% of init to prevent starvation
 
     log = {"train/loss": loss.item(), "train/grad_norm": grad_norm,
            "train/lr": lr_now, "train/lr_muon": lr_muon_now}
