@@ -55,7 +55,7 @@ INDUCTOR_CACHE = f"{DATA_ROOT}/cache/inductor"
 def train(
     commit: str,
     model: str = "experiment",
-    batch_size: int = 32,
+    batch_size: int = 128,
     max_steps: int = 20000,
     val_every: int = 2000,
     val_steps: int = 10,
@@ -170,7 +170,7 @@ def upload_corpus():
 def main(
     commit: str = "",
     model: str = "experiment",
-    batch_size: int = 32,
+    batch_size: int = 128,
     max_steps: int = 20000,
     val_every: int = 2000,
     val_steps: int = 5,
