@@ -224,9 +224,9 @@ def build_corpus(
         cmd1 += ["--source", source.strip()]
 
     proc = subprocess.Popen(cmd1, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                            text=True, bufsize=1, cwd=repo_dir, env=env)
+                            cwd=repo_dir, env=env)
     for line in proc.stdout:
-        print(line, end="", flush=True)
+        print(line.decode("utf-8", errors="replace"), end="", flush=True)
     proc.wait()
     if proc.returncode != 0:
         raise RuntimeError(f"pipeline.py exited {proc.returncode}")
@@ -242,9 +242,9 @@ def build_corpus(
         "--workers", str(workers),
     ]
     proc = subprocess.Popen(cmd2, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                            text=True, bufsize=1, cwd=repo_dir, env=env)
+                            cwd=repo_dir, env=env)
     for line in proc.stdout:
-        print(line, end="", flush=True)
+        print(line.decode("utf-8", errors="replace"), end="", flush=True)
     proc.wait()
     if proc.returncode != 0:
         raise RuntimeError(f"05_tokenize.py exited {proc.returncode}")
@@ -720,6 +720,156 @@ def scan_repos(
     print(f"\nPassing: {len(passing)}/{total} ({100*len(passing)/max(total,1):.1f}%)")
     if errors:
         print(f"Errors:  {errors}")
+    print(f"Written: {out}")
+
+
+@app.function(
+    image=pipeline_image,
+    cpu=2,
+    memory=4096,
+    timeout=15 * 60,   # 15 min per repo
+    retries=0,
+)
+def mutate_repo(repo_json: str, commit: str, n_tasks: int = 20) -> list[str]:
+    """
+    Clone a repo, install deps, generate AST-mutation tasks, return task records as JSON strings.
+    Runs on Modal CPU — uses LocalSandbox (no Docker needed inside the container).
+
+    Each returned record has the full task dataset schema:
+      id, task_name, task_category, repo, repo_commit, repo_stars, repo_topics,
+      repo_license, mutation_kind, mutation_description, mutated_file, mutation_lineno,
+      mutation_patch, failing_tests, n_failing_tests, task, test_snapshots
+    """
+    import hashlib
+    import json
+    import shutil
+    import sys
+    from pathlib import Path
+
+    repo = json.loads(repo_json)
+    full_name = repo["full_name"]
+    repo_dir = Path(f"/tmp/repos/{full_name.replace('/', '__')}")
+
+    # Clone mllm at commit to import harness (cached if container is warm)
+    mllm_dir = Path("/tmp/mllm")
+    if not (mllm_dir / "harness").exists():
+        subprocess.run(
+            ["git", "clone", "--quiet", "--filter=blob:none", "--no-checkout",
+             REPO_URL, str(mllm_dir)],
+            check=True, capture_output=True,
+        )
+    subprocess.run(
+        ["git", "-C", str(mllm_dir), "checkout", "--quiet", "--detach", commit],
+        check=True, capture_output=True,
+    )
+    if str(mllm_dir) not in sys.path:
+        sys.path.insert(0, str(mllm_dir))
+
+    from harness.sandbox import LocalSandbox
+    from harness.task_gen import generate_tasks
+
+    # Clone target repo
+    repo_dir.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        subprocess.run(
+            ["git", "clone", "--depth=1", "--quiet",
+             f"https://github.com/{full_name}.git", str(repo_dir)],
+            check=True, timeout=60,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+    except Exception:
+        return []
+
+    try:
+        tasks = generate_tasks(
+            repo_path=repo_dir,
+            n_tasks=n_tasks,
+            sandbox_class=LocalSandbox,
+        )
+
+        records = []
+        for task in tasks:
+            id_str = f"{full_name}:{task.mutated_file}:{task.mutation.kind}:{task.mutation.lineno}"
+            task_id = hashlib.sha1(id_str.encode()).hexdigest()[:16]
+            record = {
+                "id": task_id,
+                "task_name": task.name,
+                "task_category": task.category,
+                "repo": full_name,
+                "repo_commit": task.repo_commit,
+                "repo_stars": repo.get("stars", 0),
+                "repo_topics": repo.get("topics", []),
+                "repo_license": repo.get("license", ""),
+                "mutation_kind": task.mutation.kind,
+                "mutation_description": task.mutation.description,
+                "mutated_file": task.mutated_file,
+                "mutation_lineno": task.mutation.lineno,
+                "mutation_patch": task.mutation_patch,
+                "failing_tests": task.failing_tests,
+                "n_failing_tests": len(task.failing_tests),
+                "task": task.instruction,
+                "test_snapshots": task.test_snapshots,
+            }
+            records.append(json.dumps(record, ensure_ascii=False))
+        return records
+    finally:
+        shutil.rmtree(repo_dir, ignore_errors=True)
+
+
+@app.local_entrypoint()
+def generate_task_dataset(
+    passing: str = "data/repos/passing.jsonl",
+    out: str = "data/tasks/tasks.jsonl",
+    n_tasks_per_repo: int = 20,
+    commit: str = "",
+):
+    """
+    Generate AST-mutation task dataset from passing repos on Modal CPU containers.
+
+        modal run modal_app.py::generate_task_dataset
+        modal run modal_app.py::generate_task_dataset --passing data/repos/passing.jsonl --n-tasks-per-repo 20
+    """
+    import json
+    from pathlib import Path
+
+    if not commit:
+        commit = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+    branches = subprocess.run(
+        ["git", "branch", "-r", "--contains", commit],
+        capture_output=True, text=True,
+    ).stdout.strip()
+    if not branches:
+        raise SystemExit(f"Commit {commit[:12]} not pushed. Push first.")
+
+    repos = []
+    with open(passing) as f:
+        for line in f:
+            try:
+                repos.append(json.loads(line.strip()))
+            except Exception:
+                pass
+    print(f"Generating tasks for {len(repos)} repos × {n_tasks_per_repo} mutations on Modal...")
+
+    results = mutate_repo.starmap(
+        [(json.dumps(r), commit, n_tasks_per_repo) for r in repos],
+        return_exceptions=True,
+    )
+
+    Path(out).parent.mkdir(parents=True, exist_ok=True)
+    n_tasks, n_repos_ok, errors = 0, 0, 0
+    with open(out, "w") as f:
+        for batch in results:
+            if isinstance(batch, Exception):
+                errors += 1
+                continue
+            if batch:
+                n_repos_ok += 1
+                for record in batch:
+                    f.write(record + "\n")
+                    n_tasks += 1
+
+    print(f"\nRepos processed: {n_repos_ok}/{len(repos)}  errors: {errors}")
+    print(f"Tasks generated: {n_tasks}")
     print(f"Written: {out}")
 
 
