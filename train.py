@@ -132,8 +132,9 @@ def _val_prompts(n: int, prompt_tokens: int, continuation_tokens: int) -> list[t
     return prompts
 
 # per-chunk EMA of batch grad norm — used for importance sampling + loss weighting
-# initialised to uniform so early steps sample randomly
-sample_ema = np.ones(len(train_data), dtype=np.float32)
+# initialised to 10.0 (well above any real grad norm ~0.2–0.7) so all chunks are
+# sampled uniformly until first visited, then EMA decays toward actual grad norm
+sample_ema = np.full(len(train_data), 10.0, dtype=np.float32)
 
 SAMPLE_PROMPTS = _val_prompts(N_SAMPLE_PROMPTS, PROMPT_TOKENS, SAMPLE_NEW)
 _samples_table = wandb.Table(columns=["step", "prompt", "completion", "sample"])
@@ -307,6 +308,12 @@ for step in pbar:
 
         log["val/loss"] = val_loss
         log["samples"]  = _samples_table
+        if args.grad_norm_ema > 0:
+            p = sample_ema / sample_ema.sum()
+            neff = float(1.0 / (len(p) * np.dot(p, p)))  # 1.0 = uniform, 0 = collapsed
+            log["data/ema_neff"]  = neff
+            log["data/ema_mean"]  = float(sample_ema.mean())
+            log["data/ema_std"]   = float(sample_ema.std())
         pbar.set_postfix(loss=f"{loss.item():.4f}", val=f"{val_loss:.4f}",
                          gnorm=f"{grad_norm:.2f}")
     else:
