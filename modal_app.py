@@ -19,6 +19,8 @@ Build full corpus (download + filter + tokenize + upload to HF):
 Upload existing corpus to Modal volume (one-time):
     modal run modal_app.py::upload_corpus
 """
+from __future__ import annotations
+
 import os
 import re
 import subprocess
