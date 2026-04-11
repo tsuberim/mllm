@@ -252,8 +252,9 @@ def _stack_pipeline(lang: str, source: str, out_dir: Path, full: bool, workers: 
     pipeline = [
         HuggingFaceDatasetReader(
             dataset="bigcode/the-stack-dedup",
-            dataset_options={"data_dir": data_dir, "split": "train", "streaming": True},
+            dataset_options={"data_dir": data_dir, "split": "train"},
             adapter=_stack_adapter,
+            streaming=True,
             limit=limit,
         ),
         StackLicenseFilter(),
@@ -277,8 +278,9 @@ def _stackoverflow_pipeline(out_dir: Path, full: bool, workers: int, logs: Path,
     pipeline = [
         HuggingFaceDatasetReader(
             dataset="HuggingFaceH4/stack-exchange-preferences",
-            dataset_options={"split": "train", "streaming": True},
+            dataset_options={"split": "train"},
             adapter=_so_adapter,
+            streaming=True,
             limit=limit,
         ),
         # Format Q+A and filter in one custom step
@@ -347,9 +349,9 @@ def _github_commits_pipeline(out_dir: Path, full: bool, workers: int, logs: Path
                     ]
                 },
                 "split": "train",
-                "streaming": True,
             },
             adapter=_commits_adapter,
+            streaming=True,
             limit=limit,
         ),
         _CommitFormatter(),
@@ -396,8 +398,9 @@ def _github_issues_pipeline(out_dir: Path, full: bool, workers: int, logs: Path,
     pipeline = [
         HuggingFaceDatasetReader(
             dataset="bigcode/the-stack-github-issues",
-            dataset_options={"split": "train", "streaming": True},
+            dataset_options={"split": "train"},
             adapter=_issues_adapter,
+            streaming=True,
             limit=limit,
         ),
         _IssueFormatter(),
