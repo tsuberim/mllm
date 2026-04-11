@@ -82,15 +82,15 @@ INDUCTOR_CACHE = f"{DATA_ROOT}/cache/inductor"
 def train(
     commit: str,
     model: str = "experiment",
-    batch_size: int = 128,
-    max_steps: int = 20000,
-    val_every: int = 2000,
+    batch_size: int = 40,
+    max_steps: int = 10000,
+    val_every: int = 1000,
     val_steps: int = 10,
     save_every: int = 1000,
     bf16: bool = True,
     grad_checkpoint: bool = False,
-    lr_min: float = 3e-5,
-    warmup: int = 200,
+    lr_min: float = 0.0,
+    warmup: int = 0,
     ema_count: float = 0.0,
     resume: bool = False,
     tag: str = "",
@@ -202,7 +202,7 @@ def build_corpus(
     processed_dir  = f"{DATA_ROOT}/processed"
     tokenized_dir  = f"{DATA_ROOT}/tokenized-new"
     logs_dir       = f"{DATA_ROOT}/pipeline-logs"
-    tok_dir        = f"{repo_dir}/data/tokenizer"
+    tok_dir        = f"{DATA_ROOT}/tokenizer"
     os.makedirs(processed_dir, exist_ok=True)
     os.makedirs(tokenized_dir, exist_ok=True)
     os.makedirs(logs_dir, exist_ok=True)
@@ -332,7 +332,7 @@ def prepare_sft(
     print(f"[prepare_sft] checked out {commit[:12]}")
 
     sft_dir = f"{DATA_ROOT}/sft"
-    tok_dir = f"{repo_dir}/data/tokenizer"
+    tok_dir = f"{DATA_ROOT}/tokenizer"
     cmd = [
         sys.executable, "-u", f"{repo_dir}/data/pipeline/06_prepare_sft.py",
         "--tok",      tok_dir,
