@@ -1,4 +1,4 @@
-<img src="docs/logo.png" alt="Merlin wizard hat logo" width="64" align="left" style="margin-right:12px; image-rendering:pixelated;" />
+<img src="docs/logo.png" alt="Merlin wizard hat logo" width="36" align="left" style="margin-right:12px; image-rendering:pixelated;" />
 
 # Merlin — Specialized Agentic Coding Model
 
