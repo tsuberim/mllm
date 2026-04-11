@@ -46,6 +46,7 @@ pipeline_image = (
     .apt_install("git")
     .pip_install(
         "datatrove[io]",
+        "regex",
         "datasets",
         "huggingface_hub",
         "tokenizers",
