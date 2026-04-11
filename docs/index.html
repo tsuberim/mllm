@@ -3,7 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Merlin — Efficient LM for Apple Silicon</title>
+  <title>Merlin — Open-Source Agentic Coding LLM</title>
+  <meta name="description" content="Merlin is a 3B open-source language model pre-trained from scratch for agentic coding. Fast, local, zero API cost. Runs on any MacBook." />
   <style>
     :root {
       --bg: #0d1117;
@@ -14,6 +15,7 @@
       --accent: #58a6ff;
       --green: #3fb950;
       --orange: #d29922;
+      --purple: #bc8cff;
     }
 
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -30,25 +32,35 @@
     a:hover { text-decoration: underline; }
 
     header {
-      max-width: 800px;
+      max-width: 820px;
       margin: 0 auto;
-      padding: 4rem 0 2rem;
+      padding: 4rem 0 2.5rem;
       border-bottom: 1px solid var(--border);
     }
 
-    header h1 {
-      font-size: 2.5rem;
-      font-weight: 700;
-      letter-spacing: -0.5px;
+    .eyebrow {
+      font-size: 0.78rem;
+      font-weight: 600;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--accent);
+      margin-bottom: 0.6rem;
     }
 
-    header h1 span { color: var(--accent); }
+    header h1 {
+      font-size: 2.8rem;
+      font-weight: 700;
+      letter-spacing: -0.5px;
+      line-height: 1.1;
+    }
 
-    header p {
-      margin-top: 0.75rem;
+    header h1 .dim { color: var(--muted); font-weight: 400; }
+
+    .tagline {
+      margin-top: 1rem;
       color: var(--muted);
       font-size: 1.1rem;
-      max-width: 560px;
+      max-width: 580px;
     }
 
     .badges {
@@ -67,15 +79,22 @@
       border: 1px solid var(--border);
       color: var(--muted);
     }
+    .badge.green  { border-color: var(--green);  color: var(--green); }
+    .badge.blue   { border-color: var(--accent);  color: var(--accent); }
+    .badge.purple { border-color: var(--purple);  color: var(--purple); }
+    .badge.orange { border-color: var(--orange);  color: var(--orange); }
 
-    .badge.green { border-color: var(--green); color: var(--green); }
-    .badge.blue  { border-color: var(--accent); color: var(--accent); }
+    .cta-row {
+      display: flex;
+      gap: 0.75rem;
+      flex-wrap: wrap;
+      margin-top: 1.75rem;
+    }
 
     .cta {
       display: inline-flex;
       align-items: center;
       gap: 0.4rem;
-      margin-top: 1.5rem;
       padding: 0.55rem 1.1rem;
       background: var(--accent);
       color: #0d1117;
@@ -85,16 +104,30 @@
     }
     .cta:hover { background: #79c0ff; text-decoration: none; }
 
+    .cta-secondary {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      padding: 0.55rem 1.1rem;
+      background: transparent;
+      color: var(--text);
+      font-weight: 600;
+      border-radius: 6px;
+      font-size: 0.9rem;
+      border: 1px solid var(--border);
+    }
+    .cta-secondary:hover { border-color: var(--text); text-decoration: none; }
+
     main {
-      max-width: 800px;
+      max-width: 820px;
       margin: 0 auto;
       padding: 3rem 0 5rem;
     }
 
-    section { margin-bottom: 3rem; }
+    section { margin-bottom: 3.5rem; }
 
     h2 {
-      font-size: 1.25rem;
+      font-size: 1.2rem;
       font-weight: 600;
       margin-bottom: 1rem;
       padding-bottom: 0.4rem;
@@ -103,6 +136,33 @@
     }
 
     p { color: var(--muted); margin-bottom: 0.75rem; }
+    p:last-child { margin-bottom: 0; }
+
+    /* Two-col layout for the concept section */
+    .two-col {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1rem;
+    }
+    @media (max-width: 600px) { .two-col { grid-template-columns: 1fr; } }
+
+    .box {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1.1rem 1.25rem;
+    }
+
+    .box .box-title {
+      font-size: 0.78rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+      color: var(--muted);
+      margin-bottom: 0.5rem;
+    }
+
+    .box p { font-size: 0.9rem; }
 
     table {
       width: 100%;
@@ -116,7 +176,7 @@
       color: var(--muted);
       font-weight: 600;
       border-bottom: 1px solid var(--border);
-      font-size: 0.8rem;
+      font-size: 0.78rem;
       text-transform: uppercase;
       letter-spacing: 0.05em;
     }
@@ -125,15 +185,20 @@
       padding: 0.55rem 0.75rem;
       border-bottom: 1px solid var(--border);
       color: var(--text);
+      vertical-align: top;
     }
 
     tr:last-child td { border-bottom: none; }
-
     .highlight td { color: var(--green); font-weight: 600; }
+    td .muted { color: var(--muted); font-size: 0.85rem; }
+
+    .status-done   { color: var(--green); }
+    .status-active { color: var(--orange); }
+    .status-plan   { color: var(--muted); }
 
     .card-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+      grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
       gap: 1rem;
     }
 
@@ -153,7 +218,7 @@
     }
 
     .card .value {
-      font-size: 1.4rem;
+      font-size: 1.5rem;
       font-weight: 700;
       color: var(--green);
     }
@@ -179,8 +244,24 @@
       color: var(--text);
     }
 
+    .protocol-box {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1rem 1.25rem;
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+      font-size: 0.82rem;
+      line-height: 1.7;
+      color: var(--muted);
+      overflow-x: auto;
+    }
+
+    .protocol-box .tok-special { color: var(--purple); }
+    .protocol-box .tok-text    { color: var(--text); }
+    .protocol-box .tok-result  { color: var(--green); }
+
     footer {
-      max-width: 800px;
+      max-width: 820px;
       margin: 0 auto;
       padding: 2rem 0;
       border-top: 1px solid var(--border);
@@ -196,107 +277,183 @@
 <body>
 
 <header>
-  <h1><span>Merlin</span></h1>
-  <p>A small language model built from scratch for local inference on Apple Silicon — MacBook Pro and iPhone.</p>
+  <div class="eyebrow">Open Source · Pre-trained from scratch · MIT License</div>
+  <h1>Merlin <span class="dim">/ 3B</span></h1>
+  <p class="tagline">A language model built from scratch to be a brute agentic worker. Runs on your MacBook — no API key, no data leaving your machine, no cost per call. While you think, it executes.</p>
   <div class="badges">
+    <span class="badge green">100% local</span>
+    <span class="badge green">zero API cost</span>
+    <span class="badge green">your data stays on-device</span>
+    <span class="badge blue">3.17B params · int4 ~1.5GB</span>
     <span class="badge blue">PyTorch + MLX</span>
-    <span class="badge blue">Apple Silicon</span>
-    <span class="badge green">MIT License</span>
-    <span class="badge">3B iPhone · 7B MacBook</span>
-    <span class="badge">Knowledge Distillation</span>
+    <span class="badge purple">RL post-training</span>
   </div>
-  <a class="cta" href="https://github.com/tsuberim/merlin">
-    View on GitHub →
-  </a>
+  <div class="cta-row">
+    <a class="cta" href="https://github.com/tsuberim/merlin">View on GitHub →</a>
+    <a class="cta-secondary" href="https://huggingface.co/tsuberim/merlin-tokenizer-v0">HuggingFace</a>
+  </div>
 </header>
 
 <main>
 
   <section>
-    <h2>Benchmarks — Prototype (M4 MacBook Pro)</h2>
-    <p>Prototype, ~117M parameters. Target is 1B with distillation from Qwen2.5-3B. Quantization and KV cache measured end-to-end including prefill.</p>
-    <table>
-      <thead>
-        <tr>
-          <th>Setup</th>
-          <th>Tokens / sec</th>
-          <th>Peak Memory</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td>fp32, no KV cache</td>
-          <td>38.7</td>
-          <td>1536 MB</td>
-        </tr>
-        <tr>
-          <td>fp32 + KV cache</td>
-          <td>242.6</td>
-          <td>802 MB</td>
-        </tr>
-        <tr class="highlight">
-          <td>int4 + KV cache</td>
-          <td>625.3</td>
-          <td>188 MB</td>
-        </tr>
-      </tbody>
-    </table>
-  </section>
-
-  <section>
-    <h2>Headline Numbers</h2>
-    <div class="card-grid">
-      <div class="card">
-        <div class="label">Peak TPS</div>
-        <div class="value">625</div>
-        <div class="sub">int4 + KV cache on M4</div>
+    <h2>The Idea</h2>
+    <p>Every LLM agent call has two parts: reasoning (hard) and execution (easy). Today both hit a frontier model at $1–10/M tokens. That's expensive for the easy part.</p>
+    <p>Merlin is purpose-built for the execution role: grep a file, run a test, rename a function, execute a script. A smarter orchestrator (Claude, GPT-4) handles planning; Merlin is the brute-force execution layer beneath it — fast, parallel, and completely under your control.</p>
+    <div class="two-col" style="margin-top:1.25rem">
+      <div class="box">
+        <div class="box-title">Your code stays yours</div>
+        <p>Runs entirely on your machine. No API calls, no telemetry, no cloud. Your codebase never leaves your laptop — not even for a status ping.</p>
       </div>
-      <div class="card">
-        <div class="label">Memory (int4)</div>
-        <div class="value">188 MB</div>
-        <div class="sub">fits on iPhone (≤4 GB)</div>
+      <div class="box">
+        <div class="box-title">Zero cost per call</div>
+        <p>No tokens, no subscriptions, no rate limits. Run it a thousand times in a pre-commit hook, a file watcher, a test suite. The marginal cost is electricity.</p>
       </div>
-      <div class="card">
-        <div class="label">iPhone target</div>
-        <div class="value">~3B</div>
-        <div class="sub">3.17B · int4 ≈ 1.5 GB</div>
+    </div>
+    <div class="two-col" style="margin-top:1rem">
+      <div class="box">
+        <div class="box-title">Local mode</div>
+        <p>One worker on your MacBook. Private, offline, instant. Always on — no latency to a remote API, no outage risk.</p>
       </div>
-      <div class="card">
-        <div class="label">MacBook target</div>
-        <div class="value">~7B</div>
-        <div class="sub">7.19B · int4 ≈ 3.5 GB</div>
-      </div>
-      <div class="card">
-        <div class="label">Training</div>
-        <div class="value">KD</div>
-        <div class="sub">Qwen2.5-3B teacher</div>
+      <div class="box">
+        <div class="box-title">Hosted mode</div>
+        <p>100–1000 workers via GPU batching. Pay-per-task. Spawn one per file and refactor an entire repo in seconds.</p>
       </div>
     </div>
   </section>
 
   <section>
-    <h2>Architecture</h2>
-    <p>GPT-style decoder-only transformer. Three configs from sanity-check to production.</p>
+    <h2>Design Choices</h2>
     <table>
       <thead>
+        <tr><th>Choice</th><th>What</th><th>Why</th></tr>
+      </thead>
+      <tbody>
         <tr>
-          <th>Config</th>
-          <th>Params</th>
-          <th>n_embd</th>
-          <th>n_head</th>
-          <th>n_layer</th>
-          <th>block_size</th>
+          <td>Pre-trained from scratch</td>
+          <td>100B tokens, corpus weighted toward code + agentic traces</td>
+          <td>No distillation from proprietary models — weights are commercially clean</td>
         </tr>
+        <tr>
+          <td>Custom tokenizer</td>
+          <td>32K BPE vocab + 18 agent protocol special tokens</td>
+          <td>Tool-call protocol is first-class, not bolted on</td>
+        </tr>
+        <tr>
+          <td>6K context window</td>
+          <td>block_size = 4096 training, 6144 packed chunks</td>
+          <td>Sized for one large Python file + agent overhead; not a general-purpose model</td>
+        </tr>
+        <tr>
+          <td>RL post-training</td>
+          <td>GRPO on verifiable bash/filesystem rewards</td>
+          <td>Ground truth without a judge model; scalable to millions of tasks</td>
+        </tr>
+        <tr>
+          <td>MLX inference</td>
+          <td>int4 quantization via MLX on Apple Silicon</td>
+          <td>~1.5GB weights, &gt;500 tok/s on M3 MacBook — no GPU needed</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>Agent Protocol</h2>
+    <p>18 special tokens define the tool-call format. The model learns to emit structured tool calls and parse results — no prompt engineering required at inference time.</p>
+    <div class="protocol-box">
+<span class="tok-special">&lt;|task|&gt;</span><span class="tok-text"> Read the file at src/main.py and return the function names.</span>
+<span class="tok-special">&lt;|think|&gt;</span><span class="tok-text"> I need to read the file first.</span><span class="tok-special">&lt;|/think|&gt;</span>
+<span class="tok-special">&lt;|tool_call|&gt;</span><span class="tok-special">&lt;|tool_name|&gt;</span><span class="tok-text">read_file</span><span class="tok-special">&lt;|tool_args|&gt;</span><span class="tok-text">{"path": "src/main.py"}</span><span class="tok-special">&lt;|/tool_call|&gt;</span>
+<span class="tok-special">&lt;|tool_result|&gt;</span><span class="tok-result">def train(): ...\ndef evaluate(): ...</span><span class="tok-special">&lt;|/tool_result|&gt;</span>
+<span class="tok-special">&lt;|answer|&gt;</span><span class="tok-text"> train, evaluate</span>
+    </div>
+  </section>
+
+  <section>
+    <h2>Corpus</h2>
+    <p>~100B tokens across 7 sources. Two-phase curriculum: 80B general mix → 20B upweighted traces + instruction data.</p>
+    <table>
+      <thead>
+        <tr><th>Source</th><th>Share</th><th>Role</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Stack v2 — Python</td><td>~38%</td><td>Core coding ability</td></tr>
+        <tr><td>Stack v2 — Bash/Markdown</td><td>~8%</td><td>Shell and docs</td></tr>
+        <tr><td>Agentic traces (synthetic)</td><td>~15%</td><td>Tool-call protocol, task execution</td></tr>
+        <tr><td>GitHub commits + issues</td><td>~11%</td><td>Code + natural language reasoning about code</td></tr>
+        <tr><td>Stack Overflow</td><td>~10%</td><td>Q&amp;A, debugging patterns</td></tr>
+        <tr><td>Math + instruction mix</td><td>~12%</td><td>Reasoning, instruction following</td></tr>
+        <tr><td>tldr pages</td><td>&lt;1%</td><td>Bash command reference</td></tr>
+      </tbody>
+    </table>
+    <p style="margin-top:1rem">v0 corpus (1.19B tokens) already published: <a href="https://huggingface.co/datasets/tsuberim/merlin-corpus-v0">tsuberim/merlin-corpus-v0</a></p>
+  </section>
+
+  <section>
+    <h2>Architecture</h2>
+    <p>GPT-style decoder-only transformer. RMSNorm, SwiGLU, GQA (n_kv_head=8), no bias, weight tying, pre-norm.</p>
+    <table>
+      <thead>
+        <tr><th>Config</th><th>Params</th><th>n_embd</th><th>n_head</th><th>n_layer</th><th>block_size</th></tr>
       </thead>
       <tbody>
         <tr><td>tiny</td><td>~1.6M</td><td>32</td><td>2</td><td>2</td><td>64</td></tr>
         <tr><td>medium</td><td>~21M</td><td>256</td><td>8</td><td>8</td><td>512</td></tr>
-        <tr><td>base</td><td>~117M</td><td>768</td><td>12</td><td>12</td><td>1024</td></tr>
-        <tr class="highlight"><td>iphone</td><td>~3.17B</td><td>3072</td><td>24</td><td>20</td><td>4096</td></tr>
-        <tr class="highlight"><td>macbook</td><td>~7.19B</td><td>4096</td><td>32</td><td>26</td><td>4096</td></tr>
+        <tr><td>base (330M)</td><td>~330M</td><td>1024</td><td>16</td><td>16</td><td>2048</td></tr>
+        <tr class="highlight"><td>3b (target)</td><td>~3.17B</td><td>3072</td><td>24</td><td>20</td><td>4096</td></tr>
       </tbody>
     </table>
-    <p style="margin-top:1rem">Key choices: RMSNorm, SwiGLU MLP, weight tying, pre-norm, no bias on linear layers.</p>
+  </section>
+
+  <section>
+    <h2>Inference Performance</h2>
+    <p>Measured on prototype (~117M params, M4 MacBook Pro). The int4 MLX path is the production target for the 3B model — extrapolated weight size is ~1.5GB.</p>
+    <div class="card-grid">
+      <div class="card">
+        <div class="label">Peak TPS (prototype)</div>
+        <div class="value">625</div>
+        <div class="sub">int4 + KV cache, M4</div>
+      </div>
+      <div class="card">
+        <div class="label">Memory (int4, 3B)</div>
+        <div class="value">~1.5 GB</div>
+        <div class="sub">fits on any M-series Mac</div>
+      </div>
+      <div class="card">
+        <div class="label">Agentic eval</div>
+        <div class="value">47%</div>
+        <div class="sub">49-task harness, 3B baseline</div>
+      </div>
+      <div class="card">
+        <div class="label">Tokenizer</div>
+        <div class="value">32K</div>
+        <div class="sub">BPE + 20 special tokens</div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Build Status</h2>
+    <table>
+      <thead>
+        <tr><th>Milestone</th><th>Status</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Agentic protocol + eval harness (49 tasks)</td><td class="status-done">Done</td></tr>
+        <tr><td>Custom BPE tokenizer (32K vocab)</td><td class="status-done">Done</td></tr>
+        <tr><td>Data pipeline (download → tokenize → pack)</td><td class="status-done">Done</td></tr>
+        <tr><td>v0 corpus on HuggingFace (1.19B tokens)</td><td class="status-done">Done</td></tr>
+        <tr><td>E2E training loop, 330M on H100 via Modal</td><td class="status-done">Done</td></tr>
+        <tr><td>SFT infrastructure</td><td class="status-done">Done</td></tr>
+        <tr><td>Repo scanning pipeline (clone + pytest → passing repos)</td><td class="status-active">In progress</td></tr>
+        <tr><td>Agentic trace generation (target: 200K traces)</td><td class="status-plan">Planned</td></tr>
+        <tr><td>Full 100B token corpus</td><td class="status-plan">Planned</td></tr>
+        <tr><td>3B pre-training run (100B tokens)</td><td class="status-plan">Planned</td></tr>
+        <tr><td>RL post-training (GRPO on verifiable rewards)</td><td class="status-plan">Planned</td></tr>
+        <tr><td>MLX int4 3B model release</td><td class="status-plan">Planned</td></tr>
+      </tbody>
+    </table>
   </section>
 
   <section>
@@ -304,32 +461,18 @@
     <div class="chip-list">
       <span class="chip">PyTorch (training, CUDA)</span>
       <span class="chip">MLX (inference, Metal)</span>
-      <span class="chip">Triton (planned kernels)</span>
-      <span class="chip">CoreML (iPhone, planned)</span>
-      <span class="chip">tiktoken GPT-2</span>
-      <span class="chip">FineWeb-Edu</span>
-      <span class="chip">Knowledge Distillation</span>
-      <span class="chip">W&amp;B</span>
-      <span class="chip">HuggingFace Hub</span>
-    </div>
-    <p style="margin-top:1rem">PyTorch is the source of truth. MLX is inference-only with custom Metal kernels. Weight conversion is explicit and parity-tested at atol=1e-6.</p>
-  </section>
-
-  <section>
-    <h2>What's Next</h2>
-    <div class="chip-list">
-      <span class="chip">Muon optimizer</span>
-      <span class="chip">Tiled int4 matmul kernel</span>
-      <span class="chip">Separate prefill / decode kernels</span>
-      <span class="chip">RoPE</span>
-      <span class="chip">CoreML export (iPhone)</span>
+      <span class="chip">Modal (cloud compute)</span>
+      <span class="chip">HuggingFace tokenizers (BPE)</span>
+      <span class="chip">vLLM (trace generation)</span>
+      <span class="chip">W&amp;B (training observability)</span>
+      <span class="chip">HuggingFace Hub (datasets + models)</span>
     </div>
   </section>
 
 </main>
 
 <footer>
-  <span>MIT License · <a href="https://github.com/tsuberim/merlin">github.com/tsuberim/mllm</a></span>
+  <span>MIT License · <a href="https://github.com/tsuberim/merlin">github.com/tsuberim/merlin</a></span>
   <span>Built by Matan Tsuberi</span>
 </footer>
 
