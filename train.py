@@ -35,10 +35,10 @@ parser.add_argument("--grad_clip",  type=float, default=1.0)
 parser.add_argument("--wandb",      choices=["online", "disabled"], default="online")
 parser.add_argument("--bf16",             action="store_true", help="cast model to bfloat16 (required for ~7B on single GPU)")
 parser.add_argument("--grad_checkpoint",  action="store_true", help="gradient checkpointing (saves activation memory; enables large batches on big models)")
-parser.add_argument("--ema_stabilize",    type=float, default=0.0,
-                    help="Visits per chunk after which the grad-norm EMA stabilizes (0 = disabled). "
-                         "Sets the EMA effective window: alpha = 1 - 1/N. "
-                         "E.g. 4 → alpha=0.75, 10 → alpha=0.9.")
+parser.add_argument("--ema_count",        type=float, default=0.0,
+                    help="Visits per chunk after which the grad-norm EMA is 90%% set by observations "
+                         "(0 = disabled). Alpha = 0.1^(1/N), so init weight = alpha^N = 0.1 "
+                         "after N visits. E.g. 4 → alpha≈0.562, 10 → alpha≈0.794.")
 parser.add_argument("--resume",       action="store_true", help="resume from existing checkpoint")
 parser.add_argument("--tag",          type=str, default=None, help="tag for HF checkpoint filename (default: model name)")
 args = parser.parse_args()
@@ -136,12 +136,11 @@ def _val_prompts(n: int, prompt_tokens: int, continuation_tokens: int) -> list[t
 # init=1.0 > typical grad norm (~0.3-0.5) so all chunks sampled uniformly until visited
 # capped at 1.0 so chunks can only decay downward from init
 _alpha_ema = 0.0
-if args.ema_stabilize > 0:
-    # effective window = 1/(1-alpha) = N  →  alpha = 1 - 1/N
-    _alpha_ema = 1.0 - 1.0 / args.ema_stabilize
+if args.ema_count > 0:
+    # after N visits, init weight = alpha^N = 0.1  →  alpha = 0.1^(1/N)
+    _alpha_ema = 0.1 ** (1.0 / args.ema_count)
     _total_epochs = args.max_steps * args.batch_size / len(train_data)
-    print(f"[ema] stabilize={args.ema_stabilize} visits  alpha={_alpha_ema:.4f}  "
-          f"total_epochs={_total_epochs:.1f}")
+    print(f"[ema] count={args.ema_count}  alpha={_alpha_ema:.4f}  total_epochs={_total_epochs:.1f}")
 sample_ema = np.ones(len(train_data), dtype=np.float32)
 
 SAMPLE_PROMPTS = _val_prompts(N_SAMPLE_PROMPTS, PROMPT_TOKENS, SAMPLE_NEW)
