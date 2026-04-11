@@ -55,8 +55,8 @@ INDUCTOR_CACHE = f"{DATA_ROOT}/cache/inductor"
 def train(
     commit: str,
     model: str = "experiment",
-    batch_size: int = 8,         # matches 3B training batch size
-    max_steps: int = 65000,      # ~3 epochs at batch=8 over 173K chunks
+    batch_size: int = 128,
+    max_steps: int = 65000,
     val_every: int = 5000,
     val_steps: int = 10,
     save_every: int = 20000,
@@ -170,7 +170,7 @@ def upload_corpus():
 def main(
     commit: str = "",
     model: str = "experiment",
-    batch_size: int = 8,
+    batch_size: int = 128,
     max_steps: int = 65000,
     val_every: int = 5000,
     val_steps: int = 5,
