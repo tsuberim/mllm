@@ -277,15 +277,15 @@
 <body>
 
 <header>
-  <div class="eyebrow">Open Source · Pre-trained from scratch · MIT License</div>
+  <div class="eyebrow">Specialized Agentic Coding Model · Pre-trained from scratch · MIT License</div>
   <h1>Merlin <span class="dim">/ 3B</span></h1>
-  <p class="tagline">A language model built from scratch to be a brute agentic worker. Runs on your MacBook — no API key, no data leaving your machine, no cost per call. While you think, it executes.</p>
+  <p class="tagline">A language model built from scratch <em>exclusively</em> for agentic coding — not a general assistant, not a fine-tuned GPT. Every training token, every design decision, every protocol token is optimized for one job: executing code tasks fast, locally, and at scale.</p>
   <div class="badges">
+    <span class="badge orange">specialized agentic coding</span>
     <span class="badge green">100% local</span>
     <span class="badge green">zero API cost</span>
     <span class="badge green">your data stays on-device</span>
     <span class="badge blue">3.17B params · int4 ~1.5GB</span>
-    <span class="badge blue">PyTorch + MLX</span>
     <span class="badge purple">RL post-training</span>
   </div>
   <div class="cta-row">
@@ -299,7 +299,8 @@
   <section>
     <h2>The Idea</h2>
     <p>Every LLM agent call has two parts: reasoning (hard) and execution (easy). Today both hit a frontier model at $1–10/M tokens. That's expensive for the easy part.</p>
-    <p>Merlin is purpose-built for the execution role: grep a file, run a test, rename a function, execute a script. A smarter orchestrator (Claude, GPT-4) handles planning; Merlin is the brute-force execution layer beneath it — fast, parallel, and completely under your control.</p>
+    <p>Merlin is not a general-purpose model that happens to write code. It is a <strong>highly specialized agentic coding model</strong> — trained end-to-end on code, bash, tool-call traces, and commit history, with a custom tokenizer that treats tool invocations as first-class syntax. It knows one domain and executes it without hesitation.</p>
+    <p>A smarter orchestrator (Claude, GPT-4) handles planning; Merlin is the brute-force execution layer beneath it — fast, parallel, and completely under your control.</p>
     <div class="two-col" style="margin-top:1.25rem">
       <div class="box">
         <div class="box-title">Your code stays yours</div>
