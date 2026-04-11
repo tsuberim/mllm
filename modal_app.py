@@ -72,6 +72,21 @@ HF_HOME        = f"{DATA_ROOT}/cache/hf"
 INDUCTOR_CACHE = f"{DATA_ROOT}/cache/inductor"
 
 
+def _checkout(commit: str) -> str:
+    """Clone repo at commit into /tmp/<commit>. Idempotent."""
+    repo_dir = f"/tmp/{commit}"
+    if not os.path.exists(f"{repo_dir}/.git"):
+        subprocess.run(
+            ["git", "clone", "--quiet", "--filter=blob:none", "--no-checkout", REPO_URL, repo_dir],
+            check=True,
+        )
+    subprocess.run(
+        ["git", "-C", repo_dir, "checkout", "--quiet", "--detach", commit],
+        check=True,
+    )
+    return repo_dir
+
+
 @app.function(
     image=image,
     gpu="H100",
@@ -167,24 +182,14 @@ def train(
 @app.function(
     image=pipeline_image,
     cpu=32,
-    memory=32768,  # 32 GB — DataTrove streams, but filter stages need headroom
+    memory=4096,   # DataTrove streams — RAM usage is O(batch), not O(corpus)
     volumes={DATA_ROOT: vol},
     timeout=60 * 60 * 6,  # 6h per source
     secrets=[modal.Secret.from_name("merlin")],
 )
 def filter_source(commit: str, source: str, full: bool = False, workers: int = 28) -> dict:
     """Download + filter a single source. One Modal container per source, run in parallel."""
-    repo_dir = f"/tmp/{commit}"
-    if not os.path.exists(f"{repo_dir}/.git"):
-        subprocess.run(
-            ["git", "clone", "--quiet", "--filter=blob:none", "--no-checkout", REPO_URL, repo_dir],
-            check=True,
-        )
-    subprocess.run(
-        ["git", "-C", repo_dir, "checkout", "--quiet", "--detach", commit],
-        check=True,
-    )
-
+    repo_dir = _checkout(commit)
     processed_dir = f"{DATA_ROOT}/processed"
     logs_dir      = f"{DATA_ROOT}/pipeline-logs"
     os.makedirs(processed_dir, exist_ok=True)
@@ -218,50 +223,79 @@ def filter_source(commit: str, source: str, full: bool = False, workers: int = 2
 @app.function(
     image=pipeline_image,
     cpu=32,
-    memory=32768,
+    memory=4096,   # Phase 1 is CPU-bound per shard, RAM usage is O(shard), not O(corpus)
     volumes={DATA_ROOT: vol},
     timeout=60 * 60 * 6,
     secrets=[modal.Secret.from_name("merlin")],
 )
-def tokenize_corpus(commit: str, workers: int = 28) -> dict:
-    """Tokenize + pack all processed sources into corpus_train.bin / corpus_val.bin."""
-    repo_dir = f"/tmp/{commit}"
-    if not os.path.exists(f"{repo_dir}/.git"):
-        subprocess.run(
-            ["git", "clone", "--quiet", "--filter=blob:none", "--no-checkout", REPO_URL, repo_dir],
-            check=True,
-        )
-    subprocess.run(
-        ["git", "-C", repo_dir, "checkout", "--quiet", "--detach", commit],
-        check=True,
-    )
+def tokenize_phase1(commit: str, source: str, workers: int = 28) -> dict:
+    """Phase 1: tokenize shards for one source → .tok.bin + .idx.bin. Run in parallel."""
+    repo_dir = _checkout(commit)
+    vol.reload()
 
-    vol.reload()  # pick up files written by filter_source containers
     processed_dir = f"{DATA_ROOT}/processed"
     tokenized_dir = f"{DATA_ROOT}/tokenized-new"
     tok_dir       = f"{DATA_ROOT}/tokenizer"
     os.makedirs(tokenized_dir, exist_ok=True)
 
+    import time
+    t0 = time.time()
     env = {**os.environ, "HF_HOME": HF_HOME}
     cmd = [
         sys.executable, "-u", f"{repo_dir}/data/pipeline/05_tokenize.py",
-        "--in",      processed_dir,
-        "--tok",     tok_dir,
-        "--out",     tokenized_dir,
-        "--workers", str(workers),
+        "--in", processed_dir, "--tok", tok_dir, "--out", tokenized_dir,
+        "--workers", str(workers), "--phase", "1", "--source", source,
     ]
-
-    print("[tokenize_corpus] starting")
+    print(f"[tokenize_phase1:{source}] starting")
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                             cwd=repo_dir, env=env)
     for line in proc.stdout:
         print(line.decode("utf-8", errors="replace"), end="", flush=True)
     proc.wait()
     if proc.returncode != 0:
-        raise RuntimeError(f"05_tokenize.py exited {proc.returncode}")
+        raise RuntimeError(f"05_tokenize.py phase1 exited {proc.returncode}")
     vol.commit()
-    print("[tokenize_corpus] done")
-    return {"tokenized_dir": tokenized_dir}
+    elapsed = time.time() - t0
+    print(f"[tokenize_phase1:{source}] done  ({elapsed:.0f}s)")
+    return {"source": source, "elapsed": elapsed}
+
+
+@app.function(
+    image=pipeline_image,
+    cpu=4,
+    memory=32768,  # Phase 2 loads full index into RAM: ~2.4GB/100B tokens; headroom for full corpus
+    volumes={DATA_ROOT: vol},
+    timeout=60 * 60 * 6,
+    secrets=[modal.Secret.from_name("merlin")],
+)
+def tokenize_phase2(commit: str) -> dict:
+    """Phase 2: global shuffle + stream-pack → corpus_train.bin / corpus_val.bin."""
+    repo_dir = _checkout(commit)
+    vol.reload()
+
+    tokenized_dir = f"{DATA_ROOT}/tokenized-new"
+    tok_dir       = f"{DATA_ROOT}/tokenizer"
+
+    import time
+    t0 = time.time()
+    env = {**os.environ, "HF_HOME": HF_HOME}
+    cmd = [
+        sys.executable, "-u", f"{repo_dir}/data/pipeline/05_tokenize.py",
+        "--in", f"{DATA_ROOT}/processed", "--tok", tok_dir, "--out", tokenized_dir,
+        "--phase", "2",
+    ]
+    print("[tokenize_phase2] starting")
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                            cwd=repo_dir, env=env)
+    for line in proc.stdout:
+        print(line.decode("utf-8", errors="replace"), end="", flush=True)
+    proc.wait()
+    if proc.returncode != 0:
+        raise RuntimeError(f"05_tokenize.py phase2 exited {proc.returncode}")
+    vol.commit()
+    elapsed = time.time() - t0
+    print(f"[tokenize_phase2] done  ({elapsed:.0f}s)")
+    return {"tokenized_dir": tokenized_dir, "elapsed": elapsed}
 
 
 @app.function(
@@ -280,31 +314,38 @@ def build_corpus(
     hf_corpus_repo: str = "tsuberim/merlin-corpus-v1",
 ):
     """
-    Full corpus pipeline — parallel per-source filtering, then tokenize, then HF upload.
-      Step 1: filter_source × N  (one Modal container per source, all in parallel)
-      Step 2: tokenize_corpus    (single container after all sources done)
+    Full corpus pipeline — all steps parallelized across sources where possible.
+      Step 1: filter_source × N      (parallel, one container per source)
+      Step 2a: tokenize_phase1 × N   (parallel, one container per source)
+      Step 2b: tokenize_phase2       (single container — global shuffle + pack)
       Step 3: upload to HF
-    Resumable: DataTrove tracks completed shards; re-run skips finished sources.
+    Resumable: DataTrove tracks completed shards; phase1 skips existing .tok.bin files.
     """
     import time
     source_list = [s.strip() for s in sources.split(",")]
     print(f"[build_corpus] sources={source_list}  full={full}  workers={workers}")
     t_total = time.time()
 
-    # ── step 1: parallel per-source filtering ─────────────────────────────────
-    print("\n[build_corpus] step 1: fan out filter_source (one container per source)")
+    # ── step 1: parallel filter ────────────────────────────────────────────────
+    print("\n[build_corpus] step 1: filter (parallel per source)")
     t0 = time.time()
-    args = [(commit, src, full, workers) for src in source_list]
-    results = list(filter_source.starmap(args))
+    results = list(filter_source.starmap([(commit, src, full, workers) for src in source_list]))
     t1 = time.time()
     print(f"[build_corpus] step 1 done: {[r['source'] for r in results]}  ({t1-t0:.0f}s)")
 
-    # ── step 2: tokenize + pack ────────────────────────────────────────────────
-    print("\n[build_corpus] step 2: tokenize + pack")
+    # ── step 2a: parallel tokenize phase 1 ────────────────────────────────────
+    print("\n[build_corpus] step 2a: tokenize phase 1 (parallel per source)")
     t0 = time.time()
-    tokenize_corpus.remote(commit, workers)
+    p1_results = list(tokenize_phase1.starmap([(commit, src, workers) for src in source_list]))
     t1 = time.time()
-    print(f"[build_corpus] step 2 done  ({t1-t0:.0f}s)")
+    print(f"[build_corpus] step 2a done: {[r['source'] for r in p1_results]}  ({t1-t0:.0f}s)")
+
+    # ── step 2b: tokenize phase 2 (serial global pack) ────────────────────────
+    print("\n[build_corpus] step 2b: tokenize phase 2 (global pack)")
+    t0 = time.time()
+    tokenize_phase2.remote(commit)
+    t1 = time.time()
+    print(f"[build_corpus] step 2b done  ({t1-t0:.0f}s)")
 
     # ── step 3: upload to HF ──────────────────────────────────────────────────
     vol.reload()
@@ -316,21 +357,20 @@ def build_corpus(
     create_repo(hf_corpus_repo, repo_type="dataset", exist_ok=True,
                 token=os.environ.get("HF_TOKEN"))
     for fname in ["corpus_train.bin", "corpus_val.bin"]:
-        src = f"{tokenized_dir}/{fname}"
-        if not os.path.exists(src):
+        src_path = f"{tokenized_dir}/{fname}"
+        if not os.path.exists(src_path):
             print(f"  WARNING: {fname} not found, skipping")
             continue
-        size_gb = os.path.getsize(src) / 1e9
+        size_gb = os.path.getsize(src_path) / 1e9
         print(f"  uploading {fname} ({size_gb:.2f} GB) ...")
         hf.upload_file(
-            path_or_fileobj=src,
+            path_or_fileobj=src_path,
             path_in_repo=f"data/{fname}",
             repo_id=hf_corpus_repo,
             repo_type="dataset",
             token=os.environ.get("HF_TOKEN"),
         )
         print(f"    done")
-
     t1 = time.time()
     print(f"[build_corpus] step 3 done  ({t1-t0:.0f}s)")
     print(f"\n[build_corpus] corpus published to {hf_corpus_repo}  total={t1-t_total:.0f}s")

@@ -258,35 +258,37 @@ def _pack_corpus(
 # Main
 # ---------------------------------------------------------------------------
 
-def pack_corpus(in_dir: Path, tokenizer_path: str, out_dir: Path, seq_len: int, workers: int, flat: bool):
+def run_phase1(in_dir: Path, tokenizer_path: str, out_dir: Path, seq_len: int,
+               workers: int, flat: bool, source: str | None = None) -> int:
+    """
+    Phase 1 only: tokenize shards → .tok.bin + .idx.bin files under out_dir/.tok/.
+    Optionally restricted to a single source (for parallel per-source containers).
+    Returns total token count.
+    """
     tokenizer = Tokenizer.from_file(tokenizer_path)
     eos_id = tokenizer.token_to_id("<|eos|>")
     bos_id = tokenizer.token_to_id("<|bos|>")
     assert eos_id is not None, "<|eos|> not in tokenizer vocab"
     assert bos_id is not None, "<|bos|> not in tokenizer vocab"
 
-    sources = _iter_shards(in_dir, flat)
-    if not sources:
-        print(f"No JSONL shards found in {in_dir}")
-        sys.exit(1)
+    all_sources = _iter_shards(in_dir, flat)
+    if source:
+        all_sources = [(s, shards) for s, shards in all_sources if s == source]
+    if not all_sources:
+        print(f"No shards found (source={source})")
+        return 0
 
     tok_dir = out_dir / ".tok"
     tok_dir.mkdir(parents=True, exist_ok=True)
-    out_dir.mkdir(parents=True, exist_ok=True)
 
-    # ── Phase 1: tokenize all shards in parallel ───────────────────────────────
-    print("Phase 1: tokenizing shards ...")
-    all_shard_pairs: list[tuple[Path, Path]] = []  # (tok_path, idx_path) per shard
     shard_worker_args = []
-
-    for source, shards in sources:
-        src_tok_dir = tok_dir / source
+    for src, shards in all_sources:
+        src_tok_dir = tok_dir / src
         src_tok_dir.mkdir(exist_ok=True)
         for shard in shards:
             stem = Path(shard).stem.replace(".jsonl", "")
             tok_path = src_tok_dir / f"{stem}.tok.bin"
             idx_path = src_tok_dir / f"{stem}.idx.bin"
-            all_shard_pairs.append((tok_path, idx_path))
             shard_worker_args.append((
                 str(shard), str(tok_path), str(idx_path),
                 tokenizer_path, seq_len, bos_id, eos_id,
@@ -297,16 +299,37 @@ def pack_corpus(in_dir: Path, tokenizer_path: str, out_dir: Path, seq_len: int, 
         for n_docs, n_tokens in tqdm(
             pool.imap(_tokenize_shard, shard_worker_args),
             total=len(shard_worker_args),
-            desc="shards",
+            desc=f"shards({source or 'all'})",
             unit="shard",
         ):
             total_docs += n_docs
             total_tokens += n_tokens
 
-    print(f"\nPhase 1 done: {total_docs:,} docs, {total_tokens:,} tokens ({total_tokens/1e9:.2f}B)")
+    print(f"Phase 1 done ({source or 'all'}): {total_docs:,} docs, {total_tokens:,} tokens ({total_tokens/1e9:.2f}B)")
+    return total_tokens
 
-    # ── Phase 2: load indices, shuffle, stream-pack ────────────────────────────
-    print("\nPhase 2: loading indices ...")
+
+def run_phase2(out_dir: Path, tokenizer_path: str, seq_len: int) -> None:
+    """
+    Phase 2 only: discover all .tok.bin/.idx.bin already written, shuffle, stream-pack.
+    Run after all Phase 1 containers have finished.
+    """
+    tokenizer = Tokenizer.from_file(tokenizer_path)
+    eos_id = tokenizer.token_to_id("<|eos|>")
+    assert eos_id is not None, "<|eos|> not in tokenizer vocab"
+
+    tok_dir = out_dir / ".tok"
+    # Discover all shard pairs from disk (stable sort for reproducibility)
+    all_shard_pairs: list[tuple[Path, Path]] = []
+    for idx_path in sorted(tok_dir.rglob("*.idx.bin")):
+        tok_path = idx_path.with_suffix("").with_suffix(".tok.bin")
+        all_shard_pairs.append((tok_path, idx_path))
+
+    if not all_shard_pairs:
+        print(f"No .idx.bin files found under {tok_dir}")
+        sys.exit(1)
+
+    print(f"\nPhase 2: loading indices ({len(all_shard_pairs):,} shards) ...")
     lengths_list  = []
     offsets_list  = []
     shard_id_list = []
@@ -317,15 +340,14 @@ def pack_corpus(in_dir: Path, tokenizer_path: str, out_dir: Path, seq_len: int, 
         lengths = np.fromfile(str(idx_path), dtype=np.uint32)
         if len(lengths) == 0:
             continue
-        # byte offsets within this shard's .tok.bin
         byte_offsets = np.concatenate([[0], np.cumsum(lengths[:-1].astype(np.uint64) * 2)])
         lengths_list.append(lengths)
         offsets_list.append(byte_offsets)
         shard_id_list.append(np.full(len(lengths), shard_id, dtype=np.int32))
 
-    lengths_all  = np.concatenate(lengths_list)
-    offsets_all  = np.concatenate(offsets_list)
-    shard_ids    = np.concatenate(shard_id_list)
+    lengths_all = np.concatenate(lengths_list)
+    offsets_all = np.concatenate(offsets_list)
+    shard_ids   = np.concatenate(shard_id_list)
     print(f"Index: {len(lengths_all):,} docs, {lengths_all.sum():,} tokens")
 
     _pack_corpus(tok_dir, all_shard_pairs, lengths_all, offsets_all, shard_ids,
@@ -340,6 +362,13 @@ def pack_corpus(in_dir: Path, tokenizer_path: str, out_dir: Path, seq_len: int, 
     print(f"\nPacking efficiency: {eff:.1f}%")
 
 
+def pack_corpus(in_dir: Path, tokenizer_path: str, out_dir: Path, seq_len: int, workers: int, flat: bool):
+    """Run both phases sequentially (original behaviour, used when --phase not specified)."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    run_phase1(in_dir, tokenizer_path, out_dir, seq_len, workers, flat)
+    run_phase2(out_dir, tokenizer_path, seq_len)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Tokenize and pack corpus (scalable two-phase)")
     parser.add_argument("--in",      dest="in_dir",   required=True)
@@ -348,18 +377,29 @@ def main():
     parser.add_argument("--seq-len", type=int, default=MAX_SEQ_LEN)
     parser.add_argument("--workers", type=int, default=max(1, os.cpu_count() - 1))
     parser.add_argument("--flat",    action="store_true", help="Legacy flat JSONL input")
+    parser.add_argument("--phase",   type=int, choices=[1, 2], default=None,
+                        help="Run only phase 1 (tokenize shards) or phase 2 (pack). Default: both.")
+    parser.add_argument("--source",  default=None,
+                        help="Phase 1 only: restrict to this source directory name.")
     args = parser.parse_args()
 
-    in_dir  = Path(args.in_dir)
-    out_dir = Path(args.out)
+    in_dir   = Path(args.in_dir)
+    out_dir  = Path(args.out)
     tok_path = str(Path(args.tok_dir) / "tokenizer.json")
+    out_dir.mkdir(parents=True, exist_ok=True)
 
     if not Path(tok_path).exists():
         print(f"Tokenizer not found: {tok_path}")
         sys.exit(1)
 
-    print(f"workers: {args.workers}  seq_len: {args.seq_len}")
-    pack_corpus(in_dir, tok_path, out_dir, args.seq_len, args.workers, args.flat)
+    print(f"workers: {args.workers}  seq_len: {args.seq_len}  phase: {args.phase or 'both'}  source: {args.source or 'all'}")
+
+    if args.phase == 1:
+        run_phase1(in_dir, tok_path, out_dir, args.seq_len, args.workers, args.flat, args.source)
+    elif args.phase == 2:
+        run_phase2(out_dir, tok_path, args.seq_len)
+    else:
+        pack_corpus(in_dir, tok_path, out_dir, args.seq_len, args.workers, args.flat)
 
 
 if __name__ == "__main__":
