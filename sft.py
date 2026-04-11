@@ -172,7 +172,10 @@ _load_base()
 
 # ── checkpoint save/load ──────────────────────────────────────────────────────
 def save_checkpoint(step: int):
-    ckpt = {"step": step, "model": model.state_dict(), "optim": optim.state_dict()}
+    # Strip _orig_mod. prefix added by torch.compile so checkpoints load on any device
+    raw_sd = model.state_dict()
+    clean_sd = {k.replace("_orig_mod.", ""): v for k, v in raw_sd.items()}
+    ckpt = {"step": step, "model": clean_sd, "optim": optim.state_dict()}
     buf = io.BytesIO()
     torch.save(ckpt, buf)
     with open(CKPT_NAME, "wb") as f:
