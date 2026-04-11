@@ -132,9 +132,10 @@ def _val_prompts(n: int, prompt_tokens: int, continuation_tokens: int) -> list[t
     return prompts
 
 # per-chunk EMA of batch grad norm — used for importance sampling + loss weighting
-# initialised to 10.0 (well above any real grad norm ~0.2–0.7) so all chunks are
-# sampled uniformly until first visited, then EMA decays toward actual grad norm
-sample_ema = np.full(len(train_data), 10.0, dtype=np.float32)
+# initialised to 1.0 (above real grad norm ~0.2–0.7) so all chunks are
+# sampled uniformly until first visited, then EMA decays toward actual grad norm.
+# capped at 1.0 to prevent runaway concentration on noisy outlier chunks.
+sample_ema = np.ones(len(train_data), dtype=np.float32)
 
 SAMPLE_PROMPTS = _val_prompts(N_SAMPLE_PROMPTS, PROMPT_TOKENS, SAMPLE_NEW)
 
@@ -288,7 +289,7 @@ for step in pbar:
     if args.grad_norm_ema > 0:
         alpha = args.grad_norm_ema
         ix_np = ix.numpy()
-        sample_ema[ix_np] = alpha * sample_ema[ix_np] + (1 - alpha) * grad_norm
+        sample_ema[ix_np] = np.minimum(alpha * sample_ema[ix_np] + (1 - alpha) * grad_norm, 1.0)
 
     log = {"train/loss": loss.item(), "train/grad_norm": grad_norm,
            "train/lr": lr_now, "train/lr_muon": lr_muon_now}
