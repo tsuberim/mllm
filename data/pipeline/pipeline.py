@@ -107,7 +107,7 @@ class StackPythonFilter(BaseFilter):
             return False, "line count"
         try:
             tree = ast.parse(text)
-        except SyntaxError:
+        except (SyntaxError, RecursionError):
             return False, "syntax error"
         has_def = any(
             isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
