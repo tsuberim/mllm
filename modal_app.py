@@ -62,6 +62,8 @@ def train(
     save_every: int = 1000,
     bf16: bool = True,
     grad_checkpoint: bool = False,
+    lr_min: float = 0.0,
+    warmup: int = 0,
     resume: bool = False,
     tag: str = "",
 ) -> dict:
@@ -90,6 +92,10 @@ def train(
         cmd.append("--bf16")
     if grad_checkpoint:
         cmd.append("--grad_checkpoint")
+    if lr_min > 0:
+        cmd += ["--lr_min", str(lr_min)]
+    if warmup > 0:
+        cmd += ["--warmup", str(warmup)]
     if resume:
         cmd.append("--resume")
     cmd += ["--tag", tag or commit[:12]]
@@ -168,6 +174,8 @@ def main(
     save_every: int = 500,
     bf16: bool = True,
     grad_checkpoint: bool = False,
+    lr_min: float = 0.0,
+    warmup: int = 0,
     resume: bool = False,
     tag: str = "",
 ):
@@ -195,6 +203,8 @@ def main(
         save_every=save_every,
         bf16=bf16,
         grad_checkpoint=grad_checkpoint,
+        lr_min=lr_min,
+        warmup=warmup,
         resume=resume,
         tag=tag,
     )
