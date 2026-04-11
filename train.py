@@ -301,5 +301,7 @@ for step in pbar:
 
     wandb.log(log, step=step)
 
-save_checkpoint(args.max_steps - 1)
+last_step = args.max_steps - 1
+if last_step % args.save_every != 0:
+    save_checkpoint(last_step)
 wandb.finish()
