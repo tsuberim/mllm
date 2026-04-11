@@ -105,9 +105,11 @@ class StackPythonFilter(BaseFilter):
         lines = text.splitlines()
         if not (5 <= len(lines) <= 2000):
             return False, "line count"
+        if len(text) > 200_000:
+            return False, "too large"
         try:
             tree = ast.parse(text)
-        except (SyntaxError, RecursionError):
+        except (SyntaxError, RecursionError, MemoryError):
             return False, "syntax error"
         has_def = any(
             isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
