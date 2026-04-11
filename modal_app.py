@@ -199,7 +199,9 @@ def filter_source(commit: str, source: str, full: bool = False, workers: int = 2
         "--workers", str(workers),
     ] + (["--full"] if full else [])
 
+    import time
     print(f"[filter_source:{source}] starting")
+    t0 = time.time()
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                             cwd=repo_dir, env=env)
     for line in proc.stdout:
@@ -208,8 +210,9 @@ def filter_source(commit: str, source: str, full: bool = False, workers: int = 2
     if proc.returncode != 0:
         raise RuntimeError(f"pipeline.py exited {proc.returncode} for source={source}")
     vol.commit()
-    print(f"[filter_source:{source}] done")
-    return {"source": source}
+    elapsed = time.time() - t0
+    print(f"[filter_source:{source}] done  ({elapsed:.0f}s)")
+    return {"source": source, "elapsed": elapsed}
 
 
 @app.function(
@@ -283,23 +286,31 @@ def build_corpus(
       Step 3: upload to HF
     Resumable: DataTrove tracks completed shards; re-run skips finished sources.
     """
+    import time
     source_list = [s.strip() for s in sources.split(",")]
     print(f"[build_corpus] sources={source_list}  full={full}  workers={workers}")
+    t_total = time.time()
 
     # ── step 1: parallel per-source filtering ─────────────────────────────────
     print("\n[build_corpus] step 1: fan out filter_source (one container per source)")
+    t0 = time.time()
     args = [(commit, src, full, workers) for src in source_list]
     results = list(filter_source.starmap(args))
-    print(f"[build_corpus] step 1 done: {[r['source'] for r in results]}")
+    t1 = time.time()
+    print(f"[build_corpus] step 1 done: {[r['source'] for r in results]}  ({t1-t0:.0f}s)")
 
     # ── step 2: tokenize + pack ────────────────────────────────────────────────
     print("\n[build_corpus] step 2: tokenize + pack")
+    t0 = time.time()
     tokenize_corpus.remote(commit, workers)
+    t1 = time.time()
+    print(f"[build_corpus] step 2 done  ({t1-t0:.0f}s)")
 
     # ── step 3: upload to HF ──────────────────────────────────────────────────
     vol.reload()
     tokenized_dir = f"{DATA_ROOT}/tokenized-new"
     print(f"\n[build_corpus] step 3: uploading to {hf_corpus_repo}")
+    t0 = time.time()
     from huggingface_hub import HfApi, create_repo
     hf = HfApi()
     create_repo(hf_corpus_repo, repo_type="dataset", exist_ok=True,
@@ -320,7 +331,9 @@ def build_corpus(
         )
         print(f"    done")
 
-    print(f"\n[build_corpus] corpus published to {hf_corpus_repo}")
+    t1 = time.time()
+    print(f"[build_corpus] step 3 done  ({t1-t0:.0f}s)")
+    print(f"\n[build_corpus] corpus published to {hf_corpus_repo}  total={t1-t_total:.0f}s")
     return {"repo": hf_corpus_repo}
 
 
