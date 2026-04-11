@@ -12,3 +12,4 @@ pytest
 mlx-lm
 datasketch
 tokenizers
+datatrove[io]

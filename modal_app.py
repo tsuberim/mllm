@@ -7,7 +7,10 @@ Deploy (needed once, or after requirements.txt changes):
 Run an experiment:
     modal run modal_app.py --commit <sha> [--model experiment] [--max-steps 200]
 
-Upload corpus to Modal volume (one-time):
+Build full corpus (download + filter + tokenize + upload to HF):
+    modal run modal_app.py::build_corpus [--sources stack_python,stack_bash,...] [--full] [--workers 32]
+
+Upload existing corpus to Modal volume (one-time):
     modal run modal_app.py::upload_corpus
 """
 import os
@@ -37,6 +40,21 @@ image = (
     )
 )
 
+# CPU-only image for data pipeline — lighter, cheaper, faster to build.
+pipeline_image = (
+    modal.Image.debian_slim(python_version="3.11")
+    .apt_install("git")
+    .pip_install(
+        "datatrove[io]",
+        "datasets",
+        "huggingface_hub",
+        "tokenizers",
+        "tqdm",
+        "numpy",
+        "python-dotenv",
+    )
+)
+
 # Single persistent volume: corpus/ cache/hf cache/inductor
 vol = modal.Volume.from_name("merlin-data", create_if_missing=True)
 
@@ -59,7 +77,7 @@ def train(
     max_steps: int = 20000,
     val_every: int = 2000,
     val_steps: int = 10,
-    save_every: int = 10000,
+    save_every: int = 1000,
     bf16: bool = True,
     grad_checkpoint: bool = False,
     lr_min: float = 0.0,
@@ -138,6 +156,118 @@ def train(
 
 
 @app.function(
+    image=pipeline_image,
+    cpu=32,
+    memory=32768,  # 32 GB — DataTrove streams, but filter stages need headroom
+    volumes={DATA_ROOT: vol},
+    timeout=60 * 60 * 12,  # 12h max
+    secrets=[modal.Secret.from_name("merlin")],
+)
+def build_corpus(
+    commit: str,
+    sources: str = "stack_python,stack_bash,stack_md,stackoverflow,github_commits,github_issues",
+    full: bool = False,
+    workers: int = 28,
+    hf_corpus_repo: str = "tsuberim/merlin-corpus-v1",
+):
+    """
+    Full corpus pipeline on a CPU machine:
+      1. pipeline.py  — DataTrove download + filter per source  → /data/processed/
+      2. 05_tokenize.py — multiprocess tokenize + pack          → /data/tokenized-new/
+      3. Upload corpus_train.bin + corpus_val.bin to HF dataset repo
+    Resumable: re-run with same args to continue from last completed shard/source.
+    """
+    import shutil
+
+    repo_dir = f"/tmp/{commit}"
+    subprocess.run(
+        ["git", "clone", "--quiet", "--filter=blob:none", "--no-checkout", REPO_URL, repo_dir],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", repo_dir, "checkout", "--quiet", "--detach", commit],
+        check=True,
+    )
+    print(f"[pipeline] checked out {commit[:12]}")
+
+    processed_dir  = f"{DATA_ROOT}/processed"
+    tokenized_dir  = f"{DATA_ROOT}/tokenized-new"
+    logs_dir       = f"{DATA_ROOT}/pipeline-logs"
+    tok_dir        = f"{repo_dir}/data/tokenizer"
+    os.makedirs(processed_dir, exist_ok=True)
+    os.makedirs(tokenized_dir, exist_ok=True)
+    os.makedirs(logs_dir, exist_ok=True)
+
+    env = {
+        **os.environ,
+        "HF_HOME": HF_HOME,
+    }
+
+    # ── step 1: DataTrove pipeline ─────────────────────────────────────────────
+    print(f"\n[pipeline] step 1: download + filter (sources={sources}, full={full})")
+    cmd1 = [
+        sys.executable, "-u", f"{repo_dir}/data/pipeline/pipeline.py",
+        "--out",     processed_dir,
+        "--logs",    logs_dir,
+        "--workers", str(workers),
+    ] + (["--full"] if full else [])
+    for source in sources.split(","):
+        cmd1 += ["--source", source.strip()]
+
+    proc = subprocess.Popen(cmd1, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                            text=True, bufsize=1, cwd=repo_dir, env=env)
+    for line in proc.stdout:
+        print(line, end="", flush=True)
+    proc.wait()
+    if proc.returncode != 0:
+        raise RuntimeError(f"pipeline.py exited {proc.returncode}")
+    vol.commit()
+
+    # ── step 2: tokenize + pack ────────────────────────────────────────────────
+    print(f"\n[pipeline] step 2: tokenize + pack")
+    cmd2 = [
+        sys.executable, "-u", f"{repo_dir}/data/pipeline/05_tokenize.py",
+        "--in",      processed_dir,
+        "--tok",     tok_dir,
+        "--out",     tokenized_dir,
+        "--workers", str(workers),
+    ]
+    proc = subprocess.Popen(cmd2, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                            text=True, bufsize=1, cwd=repo_dir, env=env)
+    for line in proc.stdout:
+        print(line, end="", flush=True)
+    proc.wait()
+    if proc.returncode != 0:
+        raise RuntimeError(f"05_tokenize.py exited {proc.returncode}")
+    vol.commit()
+
+    # ── step 3: upload to HF ──────────────────────────────────────────────────
+    print(f"\n[pipeline] step 3: uploading to {hf_corpus_repo}")
+    from huggingface_hub import HfApi, create_repo
+    hf = HfApi()
+    create_repo(hf_corpus_repo, repo_type="dataset", exist_ok=True,
+                token=os.environ.get("HF_TOKEN"))
+    for fname in ["corpus_train.bin", "corpus_val.bin"]:
+        src = f"{tokenized_dir}/{fname}"
+        if not os.path.exists(src):
+            print(f"  WARNING: {fname} not found, skipping")
+            continue
+        size_gb = os.path.getsize(src) / 1e9
+        print(f"  uploading {fname} ({size_gb:.2f} GB) ...")
+        hf.upload_file(
+            path_or_fileobj=src,
+            path_in_repo=f"data/{fname}",
+            repo_id=hf_corpus_repo,
+            repo_type="dataset",
+            token=os.environ.get("HF_TOKEN"),
+        )
+        print(f"    done")
+
+    print(f"\n[pipeline] corpus published to {hf_corpus_repo}")
+    return {"repo": hf_corpus_repo}
+
+
+@app.function(
     image=image,
     volumes={DATA_ROOT: vol},
     timeout=60 * 60,
@@ -167,6 +297,42 @@ def upload_corpus():
 
 
 @app.local_entrypoint()
+def build_corpus_entrypoint(
+    commit: str = "",
+    sources: str = "stack_python,stack_bash,stack_md,stackoverflow,github_commits,github_issues",
+    full: bool = False,
+    workers: int = 28,
+    hf_corpus_repo: str = "tsuberim/merlin-corpus-v1",
+):
+    """
+    Launch corpus pipeline on Modal CPU machine.
+        modal run modal_app.py::build_corpus_entrypoint [--full] [--sources stack_python,...]
+    """
+    if not commit:
+        commit = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+
+    branches = subprocess.run(
+        ["git", "branch", "-r", "--contains", commit],
+        capture_output=True, text=True,
+    ).stdout.strip()
+    if not branches:
+        raise SystemExit(f"Commit {commit[:12]} not pushed to remote. Push first.")
+
+    print(f"commit:  {commit[:12]}")
+    print(f"sources: {sources}")
+    print(f"full:    {full}  workers: {workers}\n")
+
+    result = build_corpus.remote(
+        commit=commit,
+        sources=sources,
+        full=full,
+        workers=workers,
+        hf_corpus_repo=hf_corpus_repo,
+    )
+    print(f"\nCorpus published: {result['repo']}")
+
+
+@app.local_entrypoint()
 def main(
     commit: str = "",
     model: str = "experiment",
@@ -174,7 +340,7 @@ def main(
     max_steps: int = 20000,
     val_every: int = 2000,
     val_steps: int = 5,
-    save_every: int = 10000,
+    save_every: int = 1000,
     bf16: bool = True,
     grad_checkpoint: bool = False,
     lr_min: float = 0.0,
