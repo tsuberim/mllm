@@ -35,6 +35,10 @@ parser.add_argument("--grad_clip",  type=float, default=1.0)
 parser.add_argument("--wandb",      choices=["online", "disabled"], default="online")
 parser.add_argument("--bf16",             action="store_true", help="cast model to bfloat16 (required for ~7B on single GPU)")
 parser.add_argument("--grad_checkpoint",  action="store_true", help="gradient checkpointing (saves activation memory; enables large batches on big models)")
+parser.add_argument("--grad_norm_ema",    type=float, default=0.0,
+                    help="EMA alpha for per-chunk grad-norm weighting (0 = disabled). "
+                         "Maintains a per-training-chunk EMA of batch grad norm; "
+                         "uses it for both importance sampling and per-sample loss weighting.")
 parser.add_argument("--resume",       action="store_true", help="resume from existing checkpoint")
 parser.add_argument("--tag",          type=str, default=None, help="tag for HF checkpoint filename (default: model name)")
 args = parser.parse_args()
@@ -97,8 +101,11 @@ _seq_len = 6144
 train_data = np.fromfile(_train_path, dtype=np.uint16).reshape(-1, _seq_len)
 val_data   = np.fromfile(_val_path,   dtype=np.uint16).reshape(-1, _seq_len)
 
-def get_batch(data, batch_size, block_size):
-    ix = torch.randint(len(data), (batch_size,))
+def get_batch(data, batch_size, block_size, weights=None):
+    if weights is not None:
+        ix = torch.multinomial(torch.from_numpy(weights), batch_size, replacement=True)
+    else:
+        ix = torch.randint(len(data), (batch_size,))
     chunks = torch.from_numpy(data[ix.numpy()].astype(np.int64))   # (B, _seq_len)
     x = chunks[:, :block_size]
     y = chunks[:, 1:block_size + 1]
@@ -107,7 +114,7 @@ def get_batch(data, batch_size, block_size):
         y = y.pin_memory().to(device, non_blocking=True)
     else:
         x, y = x.to(device), y.to(device)
-    return x, y
+    return x, y, ix
 
 # extract document openings from the val split as fixed sample prompts + ground truth continuations
 def _val_prompts(n: int, prompt_tokens: int, continuation_tokens: int) -> list[tuple[str, str]]:
@@ -123,6 +130,10 @@ def _val_prompts(n: int, prompt_tokens: int, continuation_tokens: int) -> list[t
         else:
             i += 1
     return prompts
+
+# per-chunk EMA of batch grad norm — used for importance sampling + loss weighting
+# initialised to uniform so early steps sample randomly
+sample_ema = np.ones(len(train_data), dtype=np.float32)
 
 SAMPLE_PROMPTS = _val_prompts(N_SAMPLE_PROMPTS, PROMPT_TOKENS, SAMPLE_NEW)
 _samples_table = wandb.Table(columns=["step", "prompt", "completion", "sample"])
@@ -260,9 +271,13 @@ for step in pbar:
     set_lr([optim_adam, optim_muon], [lr_now, lr_muon_now])
 
     model.train()
-    x, y = get_batch(train_data, args.batch_size, model_cfg.block_size)
+    ema_weights = sample_ema / sample_ema.sum() if args.grad_norm_ema > 0 else None
+    x, y, ix = get_batch(train_data, args.batch_size, model_cfg.block_size, weights=ema_weights)
+    sw = None
+    if args.grad_norm_ema > 0:
+        sw = torch.from_numpy(sample_ema[ix.numpy()]).to(device=device, dtype=dtype)
     with autocast:
-        _, loss = model(x, y)
+        _, loss = model(x, y, sample_weights=sw)
 
     optim_muon.zero_grad(set_to_none=True)
     optim_adam.zero_grad(set_to_none=True)
@@ -270,6 +285,10 @@ for step in pbar:
     grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip).item()
     optim_muon.step()
     optim_adam.step()
+    if args.grad_norm_ema > 0:
+        alpha = args.grad_norm_ema
+        ix_np = ix.numpy()
+        sample_ema[ix_np] = alpha * sample_ema[ix_np] + (1 - alpha) * grad_norm
 
     log = {"train/loss": loss.item(), "train/grad_norm": grad_norm,
            "train/lr": lr_now, "train/lr_muon": lr_muon_now}
@@ -277,10 +296,11 @@ for step in pbar:
     if step % args.val_every == 0 and step > 0:
         model.eval()
         with torch.no_grad(), autocast:
-            val_loss = sum(
-                model(*get_batch(val_data, args.batch_size, model_cfg.block_size))[1].item()
-                for _ in range(args.val_steps)
-            ) / args.val_steps
+            val_loss = 0.0
+            for _ in range(args.val_steps):
+                xv, yv, _ = get_batch(val_data, args.batch_size, model_cfg.block_size)
+                val_loss += model(xv, yv)[1].item()
+            val_loss /= args.val_steps
 
         for prompt, ground_truth in SAMPLE_PROMPTS:
             _samples_table.add_data(step, prompt, prompt + generate(prompt), prompt + ground_truth)

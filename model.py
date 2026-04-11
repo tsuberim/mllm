@@ -146,7 +146,7 @@ class GPT(nn.Module):
         elif isinstance(m, nn.Embedding):
             nn.init.normal_(m.weight, std=0.02)
 
-    def forward(self, idx, targets=None, attn_mask=None):
+    def forward(self, idx, targets=None, attn_mask=None, sample_weights=None):
         from torch.utils.checkpoint import checkpoint
         B, T = idx.shape
         x = self.tok_emb(idx)
@@ -160,14 +160,30 @@ class GPT(nn.Module):
             # chunked cross-entropy: avoids materialising full [B*T, V] logit tensor
             # critical for large models where B*T*V can exceed 1.5 GB
             chunk = max(1, T // 4)
-            chunks = range(0, T, chunk)
-            loss = sum(
-                F.cross_entropy(
-                    (x[:, i:i+chunk] @ self.head.weight.T).reshape(-1, self.cfg.vocab_size),
-                    targets[:, i:i+chunk].contiguous().reshape(-1),
-                )
-                for i in chunks
-            ) / len(chunks)
+            if sample_weights is not None:
+                # per-sample loss weighting by external weights (e.g. EMA grad norm)
+                per_sample = torch.zeros(B, device=x.device, dtype=x.dtype)
+                n_chunks = 0
+                for i in range(0, T, chunk):
+                    ce = F.cross_entropy(
+                        (x[:, i:i+chunk] @ self.head.weight.T).reshape(-1, self.cfg.vocab_size),
+                        targets[:, i:i+chunk].contiguous().reshape(-1),
+                        reduction="none",
+                    ).reshape(B, -1).mean(1)
+                    per_sample = per_sample + ce
+                    n_chunks += 1
+                per_sample = per_sample / n_chunks
+                w = sample_weights / sample_weights.sum()
+                loss = (w * per_sample).sum()
+            else:
+                chunks = range(0, T, chunk)
+                loss = sum(
+                    F.cross_entropy(
+                        (x[:, i:i+chunk] @ self.head.weight.T).reshape(-1, self.cfg.vocab_size),
+                        targets[:, i:i+chunk].contiguous().reshape(-1),
+                    )
+                    for i in chunks
+                ) / len(chunks)
             return None, loss
         logits = self.head(x)
         return logits, None
