@@ -137,7 +137,6 @@ def _val_prompts(n: int, prompt_tokens: int, continuation_tokens: int) -> list[t
 sample_ema = np.full(len(train_data), 10.0, dtype=np.float32)
 
 SAMPLE_PROMPTS = _val_prompts(N_SAMPLE_PROMPTS, PROMPT_TOKENS, SAMPLE_NEW)
-_samples_table = wandb.Table(columns=["step", "prompt", "completion", "sample"])
 
 # ── model ─────────────────────────────────────────────────────────────────────
 dtype = torch.bfloat16 if args.bf16 else torch.float32
@@ -303,11 +302,12 @@ for step in pbar:
                 val_loss += model(xv, yv)[1].item()
             val_loss /= args.val_steps
 
+        tbl = wandb.Table(columns=["prompt", "completion", "ground_truth"])
         for prompt, ground_truth in SAMPLE_PROMPTS:
-            _samples_table.add_data(step, prompt, prompt + generate(prompt), prompt + ground_truth)
+            tbl.add_data(prompt, prompt + generate(prompt), prompt + ground_truth)
 
         log["val/loss"] = val_loss
-        log["samples"]  = _samples_table
+        log["samples"]  = tbl
         if args.grad_norm_ema > 0:
             p = sample_ema / sample_ema.sum()
             neff = float(1.0 / (len(p) * np.dot(p, p)))  # 1.0 = uniform, 0 = collapsed
