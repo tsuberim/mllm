@@ -137,10 +137,16 @@ def _val_prompts(n: int, prompt_tokens: int, continuation_tokens: int) -> list[t
 # capped at 1.0 so chunks can only decay downward from init
 _alpha_ema = 0.0
 if args.ema_count > 0:
-    # after N visits, init weight = alpha^N = 0.1  →  alpha = 0.1^(1/N)
-    _alpha_ema = 0.1 ** (1.0 / args.ema_count)
+    # batch grad norm is a noisy proxy: each visit provides ~1/batch_size of a clean
+    # per-sample observation, so effective visits = ema_count * batch_size.
+    # after that many visits, init weight = alpha^(N*B) = 0.1  →  alpha = 0.1^(1/(N*B))
+    # self-correcting: large batch → high alpha (conservative); small batch → lower alpha
+    _effective_count = args.ema_count * args.batch_size
+    _alpha_ema = 0.1 ** (1.0 / _effective_count)
     _total_epochs = args.max_steps * args.batch_size / len(train_data)
-    print(f"[ema] count={args.ema_count}  alpha={_alpha_ema:.4f}  total_epochs={_total_epochs:.1f}")
+    print(f"[ema] count={args.ema_count}  batch={args.batch_size}  "
+          f"effective={_effective_count:.0f}  alpha={_alpha_ema:.4f}  "
+          f"total_epochs={_total_epochs:.1f}")
 sample_ema = np.ones(len(train_data), dtype=np.float32)
 
 SAMPLE_PROMPTS = _val_prompts(N_SAMPLE_PROMPTS, PROMPT_TOKENS, SAMPLE_NEW)
