@@ -156,6 +156,19 @@ See platform comparison table above. At 35% eff. MFU (no guaranteed NVLink) → 
 
 **Decision:** run a 100-step throughput benchmark before committing. If tok/s is within 10% of the NVLink baseline, use the cheaper platform.
 
+### 4b. Pre-training 7B (Milestone 9b) ~$9,500–21,800
+
+7B model (N=7.19B, block_size=4096), 100B tokens.
+Total compute: C = 6 × 7.19B × 100B = 4.314×10²¹ FLOPs.
+
+At 38% effective MFU (8-GPU DDP with NVLink):
+- 8× GPUs: ~142k tok/s, ~443h wall clock, ~3,543 GPU-hours
+
+| Provider | $/GPU-hr | GPU-hours | Cost |
+|---|---|---|---|
+| RunPod 8×H100 SXM | $2.69 | 3,543 | **$9,530** |
+| CoreWeave 8×SXM5 | $6.155 | 3,543 | **$21,806** |
+
 ---
 
 ### 5. Post-training (Milestone 10) ~$100–500
@@ -205,10 +218,12 @@ HuggingFace: free for public datasets/models.
 | Repo scanning | Modal CPU | $250 |
 | Trace generation | DeepInfra API + pre-warmed Modal sandbox | $166 |
 | Pre-training 3B (8× H100 SXM) | RunPod on-demand | $4,089 |
+| Pre-training 7B (8× H100 SXM) | RunPod on-demand | $9,530 |
 | Post-training (SFT + RL + thinking) | Modal GPU | ~$150 |
 | Experiments & ablations | Modal GPU | ~$450 |
 | Storage | Modal volume | $0 |
-| **Total** | | **~$5,100** |
+| **Total (3B only)** | | **~$5,100** |
+| **Total (3B + 7B)** | | **~$14,700** |
 
 **Unoptimized baseline (all Modal, cold sandbox, self-hosted Qwen):** ~$7,700.
 
