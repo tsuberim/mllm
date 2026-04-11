@@ -27,8 +27,10 @@ parser.add_argument("--val_steps",  type=int,   required=True)
 parser.add_argument("--save_every", type=int,   required=True)
 parser.add_argument("--eval_every", type=int,   default=None,
                     help="run checkpoint eval every N steps (default: same as save_every)")
-parser.add_argument("--lr",         type=float, default=3e-4,  help="AdamW lr (embeddings, norms)")
-parser.add_argument("--lr_muon",    type=float, default=0.02,  help="Muon lr (2-D weight matrices)")
+parser.add_argument("--lr",         type=float, default=3e-4,  help="AdamW peak lr (embeddings, norms)")
+parser.add_argument("--lr_muon",    type=float, default=0.02,  help="Muon peak lr (2-D weight matrices)")
+parser.add_argument("--lr_min",     type=float, default=0.0,   help="min lr at end of cosine decay (0 = no schedule)")
+parser.add_argument("--warmup",     type=int,   default=0,     help="linear warmup steps")
 parser.add_argument("--grad_clip",  type=float, default=1.0)
 parser.add_argument("--wandb",      choices=["online", "disabled"], default="online")
 parser.add_argument("--bf16",             action="store_true", help="cast model to bfloat16 (required for ~7B on single GPU)")
@@ -225,11 +227,38 @@ wandb.init(
             "max_steps": args.max_steps, "device": device},
 )
 
+# ── lr schedule ───────────────────────────────────────────────────────────────
+import math
+
+def get_lr(step: int, peak_lr: float) -> float:
+    """Linear warmup → cosine decay. Returns peak_lr if no schedule configured."""
+    if args.lr_min == 0.0 and args.warmup == 0:
+        return peak_lr
+    # warmup
+    if step < args.warmup:
+        return peak_lr * (step + 1) / max(args.warmup, 1)
+    # cosine decay
+    if args.lr_min > 0:
+        progress = (step - args.warmup) / max(args.max_steps - args.warmup, 1)
+        cosine   = 0.5 * (1.0 + math.cos(math.pi * progress))
+        return args.lr_min + (peak_lr - args.lr_min) * cosine
+    return peak_lr
+
+def set_lr(optimizers, lrs):
+    for opt, lr in zip(optimizers, lrs):
+        for g in opt.param_groups:
+            g["lr"] = lr
+
 # ── training loop ─────────────────────────────────────────────────────────────
 pbar = tqdm(range(start_step, args.max_steps), initial=start_step,
             total=args.max_steps, unit="step")
 
 for step in pbar:
+    # apply lr schedule
+    lr_now      = get_lr(step, args.lr)
+    lr_muon_now = get_lr(step, args.lr_muon)
+    set_lr([optim_adam, optim_muon], [lr_now, lr_muon_now])
+
     model.train()
     x, y = get_batch(train_data, args.batch_size, model_cfg.block_size)
     with autocast:
@@ -242,7 +271,8 @@ for step in pbar:
     optim_muon.step()
     optim_adam.step()
 
-    log = {"train/loss": loss.item(), "train/grad_norm": grad_norm}
+    log = {"train/loss": loss.item(), "train/grad_norm": grad_norm,
+           "train/lr": lr_now, "train/lr_muon": lr_muon_now}
 
     if step % args.val_every == 0 and step > 0:
         model.eval()
