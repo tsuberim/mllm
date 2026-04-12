@@ -51,7 +51,7 @@ image = (
 # CPU-only image for data pipeline — lighter, cheaper, faster to build.
 pipeline_image = (
     modal.Image.debian_slim(python_version="3.11")
-    .apt_install("git")
+    .apt_install("git", "nodejs", "npm")
     .pip_install(
         "datatrove[io]",
         "regex",
@@ -61,6 +61,8 @@ pipeline_image = (
         "tqdm",
         "numpy",
         "python-dotenv",
+        "tree-sitter==0.23.2",
+        "tree-sitter-typescript==0.23.2",
     )
 )
 
@@ -112,9 +114,8 @@ def train(
     save_every: int = 1000,
     bf16: bool = True,
     grad_checkpoint: bool = False,
-    lr_min: float = 0.0,
-    warmup: int = 0,
-    ema_count: float = 0.0,
+    plateau_patience: int = 1000,
+    plateau_factor: float = 0.5,
     resume: bool = False,
     tag: str = "",
 ) -> dict:
@@ -143,12 +144,9 @@ def train(
         cmd.append("--bf16")
     if grad_checkpoint:
         cmd.append("--grad_checkpoint")
-    if lr_min > 0:
-        cmd += ["--lr_min", str(lr_min)]
-    if warmup > 0:
-        cmd += ["--warmup", str(warmup)]
-    if ema_count > 0:
-        cmd += ["--ema_count", str(ema_count)]
+    if plateau_patience > 0:
+        cmd += ["--plateau_patience", str(plateau_patience),
+                "--plateau_factor",   str(plateau_factor)]
     if resume:
         cmd.append("--resume")
     cmd += ["--tag", tag or commit[:12]]
@@ -658,8 +656,9 @@ def build_corpus_entrypoint(
 )
 def scan_repo(repo_json: str) -> str | None:
     """
-    Clone, validate, and pytest a single repo in an isolated Modal container.
-    Returns JSON string (repo metadata + status) if ≥20 tests pass, else None.
+    Clone, validate, and test a single repo in an isolated Modal container.
+    Supports Python (pytest) and TypeScript (jest/vitest) repos.
+    Returns JSON string (repo metadata + status) if enough tests pass, else None.
     No Docker needed — the container IS the sandbox.
     """
     import json, re, shutil, subprocess, sys
@@ -681,108 +680,214 @@ def scan_repo(repo_json: str) -> str | None:
         return None
 
     try:
-        # ── static service check ───────────────────────────────────────────────
-        _SERVICE_PKGS = {
-            "psycopg2", "psycopg2-binary", "psycopg", "asyncpg", "pymysql",
-            "pymongo", "motor", "redis", "aioredis", "elasticsearch",
-            "cassandra-driver", "neo4j", "influxdb", "influxdb-client",
-            "boto3", "botocore", "google-cloud-storage", "google-cloud-bigquery",
-            "azure-storage-blob", "pika", "confluent-kafka", "kafka-python",
-            "celery", "testcontainers", "pytest-docker", "sendgrid", "twilio",
-            "ldap3", "paramiko",
-        }
-        _SVC_RE = re.compile(
-            r"psycopg2\.connect\(|asyncpg\.connect\(|pymysql\.connect\("
-            r"|pymongo\.MongoClient\(|redis\.Redis\(|redis\.StrictRedis\("
-            r"|testcontainers\.|DockerContainer\(|from docker import|import docker"
-            r"|boto3\.client\(|boto3\.resource\(|storage\.Client\("
-            r"|os\.environ\[.(?:DATABASE_URL|REDIS_URL|MONGO_URI|BROKER_URL)"
-            r"|os\.getenv\(.(?:DATABASE_URL|REDIS_URL|MONGO_URI|BROKER_URL)",
-            re.IGNORECASE,
-        )
-        _SQLITE_RE = re.compile(r'create_engine\(["\']sqlite', re.IGNORECASE)
+        # ── detect language ────────────────────────────────────────────────────
+        pkg_json = repo_dir / "package.json"
+        is_ts = pkg_json.exists() and any(repo_dir.rglob("*.ts"))
 
-        for req in list(repo_dir.glob("requirements*.txt")) + list(repo_dir.glob("*/requirements*.txt")):
-            try:
-                if any(pkg in req.read_text(errors="replace").lower() for pkg in _SERVICE_PKGS):
-                    return None
-            except Exception:
-                pass
-        pyproject = repo_dir / "pyproject.toml"
-        if pyproject.exists():
-            try:
-                if any(pkg in pyproject.read_text(errors="replace").lower() for pkg in _SERVICE_PKGS):
-                    return None
-            except Exception:
-                pass
-        for tf in list(repo_dir.rglob("conftest.py")) + list(repo_dir.rglob("test_*.py")):
-            try:
-                src = tf.read_text(errors="replace")
-                if _SVC_RE.search(src) and not _SQLITE_RE.search(src):
-                    return None
-            except Exception:
-                pass
-
-        # ── require enough test files ──────────────────────────────────────────
-        n_test_files = sum(
-            1 for p in repo_dir.rglob("*.py")
-            if p.name.startswith("test_") or p.name.endswith("_test.py")
-            or "/tests/" in str(p) or "/test/" in str(p)
-        )
-        if n_test_files < 5:
-            return None
-
-        # ── install deps ───────────────────────────────────────────────────────
-        venv = repo_dir / ".venv"
-        subprocess.run([sys.executable, "-m", "venv", str(venv)], check=True, timeout=30)
-        pip = str(venv / "bin" / "pip")
-        py  = str(venv / "bin" / "python")
-
-        subprocess.run(
-            [pip, "install", "pytest", "-q", "--no-warn-script-location"],
-            check=True, timeout=120, cwd=str(repo_dir),
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        )
-        subprocess.run(
-            [pip, "install", "-e", ".", "-q", "--no-warn-script-location"],
-            timeout=120, cwd=str(repo_dir),
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        )
-        for req in repo_dir.glob("requirements*.txt"):
-            subprocess.run(
-                [pip, "install", "-r", str(req), "-q", "--no-warn-script-location"],
-                timeout=120, cwd=str(repo_dir),
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            )
-
-        # ── run pytest ─────────────────────────────────────────────────────────
-        r = subprocess.run(
-            [py, "-m", "pytest", "--tb=no", "-q", "--no-header",
-             "--continue-on-collection-errors"],
-            capture_output=True, text=True, timeout=90, cwd=str(repo_dir),
-        )
-        failing, n_passed = [], 0
-        for line in r.stdout.splitlines():
-            line = line.strip()
-            if line.startswith("FAILED "):
-                failing.append(line[7:].split(" - ")[0])
-            m = re.search(r"(\d+) passed", line)
-            if m:
-                n_passed = int(m.group(1))
-
-        if r.returncode == 5 or (n_passed == 0 and not failing):
-            return None
-        if failing:
-            return None
-        if n_passed < 20:
-            return None
-
-        repo["pytest_status"] = f"PASS ({n_passed} tests)"
-        repo["n_tests"] = n_passed
-        return json.dumps(repo)
+        if is_ts:
+            return _scan_ts_repo(repo, repo_dir)
+        else:
+            return _scan_py_repo(repo, repo_dir)
 
     finally:
         shutil.rmtree(repo_dir, ignore_errors=True)
+
+
+def _scan_py_repo(repo: dict, repo_dir) -> str | None:
+    import json, re, subprocess, sys
+    from pathlib import Path
+
+    _SERVICE_PKGS = {
+        "psycopg2", "psycopg2-binary", "psycopg", "asyncpg", "pymysql",
+        "pymongo", "motor", "redis", "aioredis", "elasticsearch",
+        "cassandra-driver", "neo4j", "influxdb", "influxdb-client",
+        "boto3", "botocore", "google-cloud-storage", "google-cloud-bigquery",
+        "azure-storage-blob", "pika", "confluent-kafka", "kafka-python",
+        "celery", "testcontainers", "pytest-docker", "sendgrid", "twilio",
+        "ldap3", "paramiko",
+    }
+    _SVC_RE = re.compile(
+        r"psycopg2\.connect\(|asyncpg\.connect\(|pymysql\.connect\("
+        r"|pymongo\.MongoClient\(|redis\.Redis\(|redis\.StrictRedis\("
+        r"|testcontainers\.|DockerContainer\(|from docker import|import docker"
+        r"|boto3\.client\(|boto3\.resource\(|storage\.Client\("
+        r"|os\.environ\[.(?:DATABASE_URL|REDIS_URL|MONGO_URI|BROKER_URL)"
+        r"|os\.getenv\(.(?:DATABASE_URL|REDIS_URL|MONGO_URI|BROKER_URL)",
+        re.IGNORECASE,
+    )
+    _SQLITE_RE = re.compile(r'create_engine\(["\']sqlite', re.IGNORECASE)
+
+    for req in list(repo_dir.glob("requirements*.txt")) + list(repo_dir.glob("*/requirements*.txt")):
+        try:
+            if any(pkg in req.read_text(errors="replace").lower() for pkg in _SERVICE_PKGS):
+                return None
+        except Exception:
+            pass
+    pyproject = repo_dir / "pyproject.toml"
+    if pyproject.exists():
+        try:
+            if any(pkg in pyproject.read_text(errors="replace").lower() for pkg in _SERVICE_PKGS):
+                return None
+        except Exception:
+            pass
+    for tf in list(repo_dir.rglob("conftest.py")) + list(repo_dir.rglob("test_*.py")):
+        try:
+            src = tf.read_text(errors="replace")
+            if _SVC_RE.search(src) and not _SQLITE_RE.search(src):
+                return None
+        except Exception:
+            pass
+
+    n_test_files = sum(
+        1 for p in repo_dir.rglob("*.py")
+        if p.name.startswith("test_") or p.name.endswith("_test.py")
+        or "/tests/" in str(p) or "/test/" in str(p)
+    )
+    if n_test_files < 5:
+        return None
+
+    venv = repo_dir / ".venv"
+    subprocess.run([sys.executable, "-m", "venv", str(venv)], check=True, timeout=30)
+    pip = str(venv / "bin" / "pip")
+    py  = str(venv / "bin" / "python")
+
+    subprocess.run(
+        [pip, "install", "pytest", "-q", "--no-warn-script-location"],
+        check=True, timeout=120, cwd=str(repo_dir),
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    subprocess.run(
+        [pip, "install", "-e", ".", "-q", "--no-warn-script-location"],
+        timeout=120, cwd=str(repo_dir),
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    for req in repo_dir.glob("requirements*.txt"):
+        subprocess.run(
+            [pip, "install", "-r", str(req), "-q", "--no-warn-script-location"],
+            timeout=120, cwd=str(repo_dir),
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+
+    r = subprocess.run(
+        [py, "-m", "pytest", "--tb=no", "-q", "--no-header",
+         "--continue-on-collection-errors"],
+        capture_output=True, text=True, timeout=90, cwd=str(repo_dir),
+    )
+    failing, n_passed = [], 0
+    for line in r.stdout.splitlines():
+        line = line.strip()
+        if line.startswith("FAILED "):
+            failing.append(line[7:].split(" - ")[0])
+        m = re.search(r"(\d+) passed", line)
+        if m:
+            n_passed = int(m.group(1))
+
+    if r.returncode == 5 or (n_passed == 0 and not failing):
+        return None
+    if failing:
+        return None
+    if n_passed < 20:
+        return None
+
+    repo["lang"] = "python"
+    repo["pytest_status"] = f"PASS ({n_passed} tests)"
+    repo["n_tests"] = n_passed
+    return json.dumps(repo)
+
+
+def _scan_ts_repo(repo: dict, repo_dir) -> str | None:
+    """Validate a TypeScript repo: npm ci + jest/vitest, all tests must pass."""
+    import json, re, subprocess
+    from pathlib import Path
+
+    # Require TS test files
+    n_test_files = sum(
+        1 for p in repo_dir.rglob("*.ts")
+        if ".test." in p.name or ".spec." in p.name
+        or "/__tests__/" in str(p).replace("\\", "/")
+    )
+    if n_test_files < 3:
+        return None
+
+    pkg_json_path = repo_dir / "package.json"
+    try:
+        import json as _json
+        pkg = _json.loads(pkg_json_path.read_text(errors="replace"))
+    except Exception:
+        return None
+
+    scripts = pkg.get("scripts", {})
+    test_script = scripts.get("test", "")
+
+    # Must use jest or vitest — skip mocha/jasmine/tape (no simple CLI interface)
+    runner = None
+    if "jest" in test_script or "jest" in pkg.get("devDependencies", {}):
+        runner = "jest"
+    elif "vitest" in test_script or "vitest" in pkg.get("devDependencies", {}):
+        runner = "vitest"
+    if runner is None:
+        return None
+
+    # Skip repos that need external services (DB, Redis, etc.)
+    _SVC_ENV = re.compile(
+        r"DATABASE_URL|REDIS_URL|MONGO_URI|POSTGRES_|MYSQL_HOST"
+        r"|AWS_ACCESS_KEY|GITHUB_TOKEN|API_KEY",
+        re.IGNORECASE,
+    )
+    for env_file in [repo_dir / ".env.example", repo_dir / ".env.test"]:
+        if env_file.exists():
+            try:
+                if _SVC_ENV.search(env_file.read_text(errors="replace")):
+                    return None
+            except Exception:
+                pass
+
+    # Install deps
+    r = subprocess.run(
+        ["npm", "ci", "--prefer-offline", "--ignore-scripts"],
+        capture_output=True, text=True, timeout=120, cwd=str(repo_dir),
+    )
+    if r.returncode != 0:
+        # fallback: npm install
+        r = subprocess.run(
+            ["npm", "install", "--ignore-scripts"],
+            capture_output=True, text=True, timeout=120, cwd=str(repo_dir),
+        )
+        if r.returncode != 0:
+            return None
+
+    # Run tests
+    if runner == "jest":
+        cmd = ["npx", "jest", "--no-coverage", "--passWithNoTests=false",
+               "--forceExit", "--testTimeout=5000"]
+    else:  # vitest
+        cmd = ["npx", "vitest", "run", "--reporter=verbose"]
+
+    r = subprocess.run(
+        cmd, capture_output=True, text=True, timeout=120, cwd=str(repo_dir),
+    )
+
+    # Parse test counts from output (works for both jest and vitest)
+    output = r.stdout + r.stderr
+    n_passed = 0
+    has_failures = False
+    for line in output.splitlines():
+        line = line.strip()
+        # jest: "Tests: 5 passed, 5 total" or "Tests: 1 failed, 5 total"
+        m = re.search(r"(\d+) passed", line)
+        if m:
+            n_passed = max(n_passed, int(m.group(1)))
+        if re.search(r"\d+ failed", line):
+            has_failures = True
+
+    if has_failures or n_passed < 20:
+        return None
+
+    repo["lang"] = "typescript"
+    repo["ts_runner"] = runner
+    repo["pytest_status"] = f"PASS ({n_passed} tests)"
+    repo["n_tests"] = n_passed
+    return json.dumps(repo)
 
 
 @app.local_entrypoint()
@@ -904,14 +1009,25 @@ def mutate_repo(repo_json: str, commit: str, n_tasks: int = 20) -> list[str]:
 
         repo_commit = tasks[0].repo_commit
         zip_key = f"{slug}@{repo_commit}"
+        lang = repo.get("lang", "python")
 
         # Zip the clean repo (pre-mutation) — used at trace gen time to reconstruct
         # the environment without re-cloning. Idempotent: skip if already zipped.
+        # For TypeScript repos, exclude node_modules (reinstall from package.json at trace time).
         zips_dir = Path(f"{DATA_ROOT}/repos/zips")
         zips_dir.mkdir(parents=True, exist_ok=True)
         zip_path = zips_dir / f"{zip_key}.zip"
         if not zip_path.exists():
-            shutil.make_archive(str(zip_path.with_suffix("")), "zip", str(repo_dir))
+            if lang == "typescript":
+                import zipfile
+                with zipfile.ZipFile(str(zip_path), "w", zipfile.ZIP_DEFLATED) as zf:
+                    for fp in repo_dir.rglob("*"):
+                        if "node_modules" in fp.parts or ".git" in fp.parts:
+                            continue
+                        if fp.is_file():
+                            zf.write(fp, fp.relative_to(repo_dir))
+            else:
+                shutil.make_archive(str(zip_path.with_suffix("")), "zip", str(repo_dir))
         vol.commit()
 
         records = []
@@ -922,6 +1038,7 @@ def mutate_repo(repo_json: str, commit: str, n_tasks: int = 20) -> list[str]:
                 "id": task_id,
                 "task_name": task.name,
                 "task_category": task.category,
+                "lang": lang,
                 "repo": full_name,
                 "repo_commit": repo_commit,
                 "repo_zip_key": zip_key,
@@ -1011,9 +1128,8 @@ def main(
     save_every: int = 1000,
     bf16: bool = True,
     grad_checkpoint: bool = False,
-    lr_min: float = 0.0,
-    warmup: int = 0,
-    ema_count: float = 0.0,
+    plateau_patience: int = 1000,
+    plateau_factor: float = 0.5,
     resume: bool = False,
     tag: str = "",
 ):
@@ -1041,9 +1157,8 @@ def main(
         save_every=save_every,
         bf16=bf16,
         grad_checkpoint=grad_checkpoint,
-        lr_min=lr_min,
-        warmup=warmup,
-        ema_count=ema_count,
+        plateau_patience=plateau_patience,
+        plateau_factor=plateau_factor,
         resume=resume,
         tag=tag,
     )

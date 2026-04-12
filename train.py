@@ -29,17 +29,12 @@ parser.add_argument("--eval_every", type=int,   default=None,
                     help="run checkpoint eval every N steps (default: same as save_every)")
 parser.add_argument("--lr",         type=float, default=3e-4,  help="AdamW peak lr (embeddings, norms)")
 parser.add_argument("--lr_muon",    type=float, default=0.02,  help="Muon peak lr (2-D weight matrices)")
-parser.add_argument("--lr_min",     type=float, default=0.0,   help="min lr for AdamW at end of cosine decay (0 = no schedule)")
-parser.add_argument("--lr_min_muon",type=float, default=None,  help="min lr for Muon at end of cosine decay (default: same ratio as lr_min/lr)")
-parser.add_argument("--warmup",     type=int,   default=0,     help="linear warmup steps")
 parser.add_argument("--grad_clip",  type=float, default=1.0)
+parser.add_argument("--plateau_patience", type=int,   default=1000, help="steps with no improvement before LR decay (converted to val checks internally; 0 = disabled)")
+parser.add_argument("--plateau_factor",   type=float, default=0.5,  help="multiply LR by this on plateau")
 parser.add_argument("--wandb",      choices=["online", "disabled"], default="online")
 parser.add_argument("--bf16",             action="store_true", help="cast model to bfloat16 (required for ~7B on single GPU)")
 parser.add_argument("--grad_checkpoint",  action="store_true", help="gradient checkpointing (saves activation memory; enables large batches on big models)")
-parser.add_argument("--ema_count",        type=float, default=0.0,
-                    help="Visits per chunk after which the grad-norm EMA is 90%% set by observations "
-                         "(0 = disabled). Alpha = 0.1^(1/N), so init weight = alpha^N = 0.1 "
-                         "after N visits. E.g. 4 → alpha≈0.562, 10 → alpha≈0.794.")
 parser.add_argument("--resume",       action="store_true", help="resume from existing checkpoint")
 parser.add_argument("--tag",          type=str, default=None, help="tag for HF checkpoint filename (default: model name)")
 args = parser.parse_args()
@@ -102,11 +97,8 @@ _seq_len = 6144
 train_data = np.fromfile(_train_path, dtype=np.uint16).reshape(-1, _seq_len)
 val_data   = np.fromfile(_val_path,   dtype=np.uint16).reshape(-1, _seq_len)
 
-def get_batch(data, batch_size, block_size, weights=None):
-    if weights is not None:
-        ix = torch.multinomial(torch.from_numpy(weights), batch_size, replacement=True)
-    else:
-        ix = torch.randint(len(data), (batch_size,))
+def get_batch(data, batch_size, block_size):
+    ix = torch.randint(len(data), (batch_size,))
     chunks = torch.from_numpy(data[ix.numpy()].astype(np.int64))   # (B, _seq_len)
     x = chunks[:, :block_size]
     y = chunks[:, 1:block_size + 1]
@@ -115,7 +107,7 @@ def get_batch(data, batch_size, block_size, weights=None):
         y = y.pin_memory().to(device, non_blocking=True)
     else:
         x, y = x.to(device), y.to(device)
-    return x, y, ix
+    return x, y
 
 # extract document openings from the val split as fixed sample prompts + ground truth continuations
 def _val_prompts(n: int, prompt_tokens: int, continuation_tokens: int) -> list[tuple[str, str]]:
@@ -131,24 +123,6 @@ def _val_prompts(n: int, prompt_tokens: int, continuation_tokens: int) -> list[t
         else:
             i += 1
     return prompts
-
-# per-chunk EMA of batch grad norm — importance sampling weights
-# alpha derived from halflife in epochs: alpha = 0.5^(1/halflife)
-# init=1.0 > typical grad norm (~0.3-0.5) so all chunks sampled uniformly until visited
-# capped at 1.0 so chunks can only decay downward from init
-_alpha_ema = 0.0
-if args.ema_count > 0:
-    # batch grad norm is a noisy proxy: each visit provides ~1/batch_size of a clean
-    # per-sample observation, so effective visits = ema_count * batch_size.
-    # after that many visits, init weight = alpha^(N*B) = 0.1  →  alpha = 0.1^(1/(N*B))
-    # self-correcting: large batch → high alpha (conservative); small batch → lower alpha
-    _effective_count = args.ema_count * args.batch_size
-    _alpha_ema = 0.1 ** (1.0 / _effective_count)
-    _total_epochs = args.max_steps * args.batch_size / len(train_data)
-    print(f"[ema] count={args.ema_count}  batch={args.batch_size}  "
-          f"effective={_effective_count:.0f}  alpha={_alpha_ema:.4f}  "
-          f"total_epochs={_total_epochs:.1f}")
-sample_ema = np.ones(len(train_data), dtype=np.float32)
 
 SAMPLE_PROMPTS = _val_prompts(N_SAMPLE_PROMPTS, PROMPT_TOKENS, SAMPLE_NEW)
 
@@ -204,6 +178,8 @@ def save_checkpoint(step):
         "model":      model.state_dict(),
         "optim_muon": optim_muon.state_dict(),
         "optim_adam": optim_adam.state_dict(),
+        "sched_adam": _sched_adam.state_dict() if _sched_adam else None,
+        "sched_muon": _sched_muon.state_dict() if _sched_muon else None,
     }
     buf = io.BytesIO()
     torch.save(ckpt, buf)
@@ -234,6 +210,9 @@ def load_checkpoint():
         if "optim_muon" in ckpt:
             optim_muon.load_state_dict(ckpt["optim_muon"])
             optim_adam.load_state_dict(ckpt["optim_adam"])
+        if _sched_adam and ckpt.get("sched_adam"):
+            _sched_adam.load_state_dict(ckpt["sched_adam"])
+            _sched_muon.load_state_dict(ckpt["sched_muon"])
         start_step = ckpt["step"] + 1
         print(f"resumed from step {start_step}")
 
@@ -249,53 +228,34 @@ wandb.init(
     mode=args.wandb,
     config={**model_cfg.__dict__, "batch_size": args.batch_size,
             "lr": args.lr, "lr_muon": args.lr_muon,
-            "lr_min": args.lr_min, "lr_min_muon": args.lr_min_muon,
-            "warmup": args.warmup,
+            "plateau_patience": args.plateau_patience, "plateau_factor": args.plateau_factor,
             "max_steps": args.max_steps, "device": device},
 )
 
 # ── lr schedule ───────────────────────────────────────────────────────────────
-import math
+_sched_adam = _sched_muon = None
+if args.plateau_patience > 0:
+    _kw = dict(mode="min", factor=args.plateau_factor, patience=args.plateau_patience)
+    _sched_adam = torch.optim.lr_scheduler.ReduceLROnPlateau(optim_adam, **_kw)
+    _sched_muon = torch.optim.lr_scheduler.ReduceLROnPlateau(optim_muon, **_kw)
 
-def get_lr(step: int, peak_lr: float, min_lr: float = 0.0) -> float:
-    """Linear warmup → cosine decay. Returns peak_lr if no schedule configured."""
-    if min_lr == 0.0 and args.warmup == 0:
-        return peak_lr
-    # warmup
-    if step < args.warmup:
-        return peak_lr * (step + 1) / max(args.warmup, 1)
-    # cosine decay
-    if min_lr > 0:
-        progress = (step - args.warmup) / max(args.max_steps - args.warmup, 1)
-        cosine   = 0.5 * (1.0 + math.cos(math.pi * progress))
-        return min_lr + (peak_lr - min_lr) * cosine
-    return peak_lr
+def maybe_decay_lr(val_loss):
+    if _sched_adam is None:
+        return
+    _sched_adam.step(val_loss)
+    _sched_muon.step(val_loss)
 
-# Per-optimizer min LRs: Muon defaults to the same ratio as AdamW (lr_min/lr)
-_lr_min_adam = args.lr_min
-_lr_min_muon = (
-    args.lr_min_muon if args.lr_min_muon is not None
-    else (args.lr_muon * args.lr_min / args.lr if args.lr_min > 0 else 0.0)
-)
-
-def set_lr(optimizers, lrs):
-    for opt, lr in zip(optimizers, lrs):
-        for g in opt.param_groups:
-            g["lr"] = lr
+def current_lrs():
+    return (optim_adam.param_groups[0]["lr"],
+            optim_muon.param_groups[0]["lr"])
 
 # ── training loop ─────────────────────────────────────────────────────────────
 pbar = tqdm(range(start_step, args.max_steps), initial=start_step,
             total=args.max_steps, unit="step")
 
 for step in pbar:
-    # apply lr schedule
-    lr_now      = get_lr(step, args.lr,      _lr_min_adam)
-    lr_muon_now = get_lr(step, args.lr_muon, _lr_min_muon)
-    set_lr([optim_adam, optim_muon], [lr_now, lr_muon_now])
-
     model.train()
-    ema_weights = sample_ema / sample_ema.sum() if _alpha_ema > 0 else None
-    x, y, ix = get_batch(train_data, args.batch_size, model_cfg.block_size, weights=ema_weights)
+    x, y = get_batch(train_data, args.batch_size, model_cfg.block_size)
     with autocast:
         _, loss = model(x, y)
 
@@ -305,20 +265,17 @@ for step in pbar:
     grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip).item()
     optim_muon.step()
     optim_adam.step()
-    if _alpha_ema > 0:
-        ix_np = ix.numpy()
-        updated = _alpha_ema * sample_ema[ix_np] + (1 - _alpha_ema) * grad_norm
-        sample_ema[ix_np] = np.clip(updated, 0.01, 1.0)  # floor at 1% of init to prevent starvation
-
+    maybe_decay_lr(loss.item())
+_lr_now, _lr_muon_now = current_lrs()
     log = {"train/loss": loss.item(), "train/grad_norm": grad_norm,
-           "train/lr": lr_now, "train/lr_muon": lr_muon_now}
+           "train/lr": _lr_now, "train/lr_muon": _lr_muon_now}
 
     if step % args.val_every == 0 and step > 0:
         model.eval()
         with torch.no_grad(), autocast:
             val_loss = 0.0
             for _ in range(args.val_steps):
-                xv, yv, _ = get_batch(val_data, args.batch_size, model_cfg.block_size)
+                xv, yv = get_batch(val_data, args.batch_size, model_cfg.block_size)
                 val_loss += model(xv, yv)[1].item()
             val_loss /= args.val_steps
 
@@ -328,12 +285,6 @@ for step in pbar:
 
         log["val/loss"] = val_loss
         log["samples"]  = tbl
-        if _alpha_ema > 0:
-            p = sample_ema / sample_ema.sum()
-            neff = float(1.0 / (len(p) * np.dot(p, p)))  # 1.0 = uniform, 0 = collapsed
-            log["data/ema_neff"]  = neff
-            log["data/ema_mean"]  = float(sample_ema.mean())
-            log["data/ema_std"]   = float(sample_ema.std())
         pbar.set_postfix(loss=f"{loss.item():.4f}", val=f"{val_loss:.4f}",
                          gnorm=f"{grad_norm:.2f}")
     else:
