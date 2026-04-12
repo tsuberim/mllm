@@ -145,7 +145,7 @@ class KVCache:
 
 @dataclass
 class Config:
-    vocab_size: int   = 32000
+    vocab_size: int   = 32016
     block_size: int   = 1024
     n_embd:     int   = 768
     n_head:     int   = 12
@@ -157,7 +157,7 @@ class Config:
     def sanity(cls): return cls(n_embd=32, n_head=2, n_kv_head=2, n_layer=2, block_size=64)
 
     @classmethod
-    def experiment(cls): return cls(n_embd=256, n_head=8, n_kv_head=2, n_layer=8, block_size=512)
+    def experiment(cls): return cls(n_embd=1024, n_head=8, n_kv_head=2, n_layer=20, block_size=2048)
 
     @classmethod
     def b3(cls): return cls(n_embd=3072, n_head=24, n_kv_head=8, n_layer=20, block_size=4096)

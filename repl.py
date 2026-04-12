@@ -3,9 +3,9 @@
 Merlin REPL — play with a trained checkpoint locally via MLX.
 
 Usage:
-    python repl.py                          # latest checkpoint for experiment model
-    python repl.py --tag <commit>           # specific run
-    python repl.py --model 3b --tag ... # different model size
+    python repl.py                          # latest checkpoint (auto-detected from HF)
+    python repl.py --tag <tag>              # specific checkpoint
+    python repl.py --model 3b              # different model size
     python repl.py --weights path/to/w.npz  # pre-converted weights
 """
 
@@ -50,27 +50,53 @@ def _convert(pt_path: Path, out_path: Path):
     print(f"  saved {out_path}")
 
 
-def resolve_weights(tag: str, model: str) -> Path:
-    """Return path to .npz weights, downloading + converting as needed."""
+def _hf_blob_sha(hf_path: str) -> str:
+    """Return the current blob SHA for a file in HF_MODEL_REPO."""
+    from huggingface_hub import HfApi
+    api = HfApi(token=os.environ.get("HF_TOKEN"))
+    info = api.get_paths_info(HF_MODEL_REPO, [hf_path], repo_type="model")
+    return info[0].blob_id
+
+
+def latest_tag() -> str:
+    """Return the tag of the most recently pushed checkpoint on HF."""
+    from huggingface_hub import HfApi
+    api = HfApi(token=os.environ.get("HF_TOKEN"))
+    files = list(api.list_repo_tree(HF_MODEL_REPO, repo_type="model", recursive=True))
+    ckpts = [f for f in files if f.path.startswith("checkpoints/ckpt_") and f.path.endswith(".pt")]
+    if not ckpts:
+        raise RuntimeError(f"No checkpoints found in {HF_MODEL_REPO}")
+    latest = max(ckpts, key=lambda f: f.last_commit.date)
+    return latest.path.removeprefix("checkpoints/ckpt_").removesuffix(".pt")
+
+
+def resolve_weights(tag: str) -> Path:
+    """Return path to .npz weights, downloading + converting as needed.
+
+    Always checks HF blob SHA; re-downloads only if it changed since last cache.
+    """
     WEIGHTS_CACHE.mkdir(parents=True, exist_ok=True)
     npz_path = WEIGHTS_CACHE / f"{tag}.npz"
-    if npz_path.exists():
+    sha_path = WEIGHTS_CACHE / f"{tag}.sha"
+    hf_file  = f"checkpoints/ckpt_{tag}.pt"
+
+    blob_sha = _hf_blob_sha(hf_file)
+    if npz_path.exists() and sha_path.exists() and sha_path.read_text().strip() == blob_sha:
         return npz_path
 
-    # download PyTorch checkpoint from HF
+    from huggingface_hub import hf_hub_download
+    import shutil
+    print(f"downloading checkpoint {tag} from {HF_MODEL_REPO} ...")
+    hf_path = hf_hub_download(
+        repo_id=HF_MODEL_REPO,
+        filename=hf_file,
+        token=os.environ.get("HF_TOKEN"),
+        force_download=True,
+    )
     pt_path = WEIGHTS_CACHE / f"{tag}.pt"
-    if not pt_path.exists():
-        from huggingface_hub import hf_hub_download
-        print(f"downloading checkpoint {tag} from {HF_MODEL_REPO} ...")
-        hf_path = hf_hub_download(
-            repo_id=HF_MODEL_REPO,
-            filename=f"checkpoints/ckpt_{tag}.pt",
-            token=os.environ.get("HF_TOKEN"),
-        )
-        import shutil
-        shutil.copy(hf_path, pt_path)
-
+    shutil.copy(hf_path, pt_path)
     _convert(pt_path, npz_path)
+    sha_path.write_text(blob_sha)
     return npz_path
 
 
@@ -101,12 +127,11 @@ def stream_generate(model: GPT, idx: mx.array, max_new: int, temperature: float)
 # ── REPL ──────────────────────────────────────────────────────────────────────
 
 BANNER = """
-merlin repl  (ctrl-d or /quit to exit, /clear to reset context)
+merlin repl  (ctrl-d or /quit to exit)
 """
 
 def run_repl(model: GPT, enc, max_new: int, temperature: float):
     print(BANNER)
-    context = ""  # accumulate conversation as plain text
     while True:
         try:
             user = input(">>> ").strip()
@@ -116,15 +141,10 @@ def run_repl(model: GPT, enc, max_new: int, temperature: float):
 
         if user == "/quit":
             break
-        if user == "/clear":
-            context = ""
-            print("(context cleared)")
-            continue
         if not user:
             continue
 
-        context += user + "\n"
-        prompt_ids = enc.encode(context)
+        prompt_ids = enc.encode(user + "\n")
 
         # trim to leave room for generated tokens
         max_prompt = model.cfg.block_size - max_new
@@ -155,7 +175,6 @@ def run_repl(model: GPT, enc, max_new: int, temperature: float):
         mem_mb  = mx.get_active_memory() / 1e6
 
         print(f"\n\033[2m[{n_new} tokens  {tps:.1f} t/s  {mem_mb:.0f} MB]\033[0m")
-        context += enc.decode(completion_ids) + "\n"
 
 
 # ── entrypoint ────────────────────────────────────────────────────────────────
@@ -164,7 +183,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--model",       choices=["sanity", "experiment", "3b", "7b"],
                         default="experiment")
-    parser.add_argument("--tag",         default=None, help="commit tag (default: latest ckpt)")
+    parser.add_argument("--tag",         default=None, help="checkpoint tag (default: latest on HF)")
     parser.add_argument("--weights",     default=None, help="path to pre-converted .npz")
     parser.add_argument("--max_new",     type=int,   default=256)
     parser.add_argument("--temperature", type=float, default=0.8)
@@ -197,12 +216,12 @@ if __name__ == "__main__":
     elif args.weights:
         print(f"loading {args.weights} ...")
         model = load_model(args.weights, cfg, bits=args.bits)
-    elif args.tag:
-        weights_path = str(resolve_weights(args.tag, args.model))
+    else:
+        tag = args.tag or latest_tag()
+        print(f"checkpoint: {tag}")
+        weights_path = str(resolve_weights(tag))
         print(f"loading {weights_path} ...")
         model = load_model(weights_path, cfg, bits=args.bits)
-    else:
-        parser.error("provide --tag <commit>, --weights <path>, or --random")
 
     nparams = sum(v.size for _, v in tree_flatten(model.parameters()))
     print(f"model: {args.model}  params: {nparams:,}")
