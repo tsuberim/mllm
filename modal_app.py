@@ -114,8 +114,8 @@ def train(
     save_every: int = 1000,
     bf16: bool = True,
     grad_checkpoint: bool = False,
-    plateau_patience: int = 1000,
-    plateau_factor: float = 0.5,
+    plateau_patience: int = 300,
+    plateau_factor: float = 0.25,
     resume: bool = False,
     tag: str = "",
 ) -> dict:
@@ -1128,8 +1128,8 @@ def main(
     save_every: int = 1000,
     bf16: bool = True,
     grad_checkpoint: bool = False,
-    plateau_patience: int = 1000,
-    plateau_factor: float = 0.5,
+    plateau_patience: int = 300,
+    plateau_factor: float = 0.25,
     resume: bool = False,
     tag: str = "",
 ):
