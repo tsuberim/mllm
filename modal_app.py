@@ -117,6 +117,7 @@ def train(
     plateau_patience: int = 500,
     plateau_factor: float = 0.25,
     resume: bool = False,
+    no_muon: bool = False,
     tag: str = "",
 ) -> dict:
     # Clone repo at exact commit — only overhead on H100 (~5s)
@@ -149,6 +150,8 @@ def train(
                 "--plateau_factor",   str(plateau_factor)]
     if resume:
         cmd.append("--resume")
+    if no_muon:
+        cmd.append("--no_muon")
     cmd += ["--tag", tag or commit[:12]]
 
     print(f"[train] {' '.join(cmd)}")
@@ -1131,6 +1134,7 @@ def main(
     plateau_patience: int = 500,
     plateau_factor: float = 0.25,
     resume: bool = False,
+    no_muon: bool = False,
     tag: str = "",
 ):
     if not commit:
@@ -1160,6 +1164,7 @@ def main(
         plateau_patience=plateau_patience,
         plateau_factor=plateau_factor,
         resume=resume,
+        no_muon=no_muon,
         tag=tag,
     )
     print(f"\nW&B: {result['wandb_url']}")

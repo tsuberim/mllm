@@ -28,7 +28,7 @@ parser.add_argument("--save_every", type=int,   required=True)
 parser.add_argument("--eval_every", type=int,   default=None,
                     help="run checkpoint eval every N steps (default: same as save_every)")
 parser.add_argument("--lr",         type=float, default=1e-4,  help="AdamW peak lr (embeddings, norms)")
-parser.add_argument("--lr_muon",    type=float, default=0.005, help="Muon peak lr (2-D weight matrices)")
+parser.add_argument("--lr_muon",    type=float, default=0.002, help="Muon peak lr (2-D weight matrices)")
 parser.add_argument("--grad_clip",  type=float, default=1.0)
 parser.add_argument("--plateau_patience", type=int,   default=500,  help="training steps with no improvement in train loss before LR decay (0 = disabled)")
 parser.add_argument("--plateau_factor",   type=float, default=0.25, help="multiply LR by this on plateau")
@@ -36,6 +36,7 @@ parser.add_argument("--wandb",      choices=["online", "disabled"], default="onl
 parser.add_argument("--bf16",             action="store_true", help="cast model to bfloat16 (required for ~7B on single GPU)")
 parser.add_argument("--grad_checkpoint",  action="store_true", help="gradient checkpointing (saves activation memory; enables large batches on big models)")
 parser.add_argument("--resume",       action="store_true", help="resume from existing checkpoint")
+parser.add_argument("--no_muon",      action="store_true", help="disable Muon; use AdamW for all params (diagnostic)")
 parser.add_argument("--tag",          type=str, default=None, help="tag for HF checkpoint filename (default: model name)")
 args = parser.parse_args()
 
@@ -144,14 +145,15 @@ for name, p in model.named_parameters():
     if id(p) in seen_ids:
         continue
     seen_ids.add(id(p))
-    if p.ndim == 2 and "tok_emb" not in name:
+    if not args.no_muon and p.ndim == 2 and "tok_emb" not in name:
         muon_params.append(p)
     else:
         adam_params.append(p)
 
-optim_muon = Muon(muon_params, lr=args.lr_muon, weight_decay=0.01)
+optim_muon = Muon(muon_params, lr=args.lr_muon, weight_decay=0.01) if muon_params else None
 optim_adam = torch.optim.AdamW(adam_params, lr=args.lr, betas=(0.9, 0.95), weight_decay=0.01,
                                fused=(device == "cuda"))
+print(f"optimizer: {'Muon+AdamW' if optim_muon else 'AdamW only'}")
 
 # ── sampling ──────────────────────────────────────────────────────────────────
 @torch.no_grad()
@@ -176,7 +178,7 @@ def save_checkpoint(step):
     ckpt = {
         "step":       step,
         "model":      model.state_dict(),
-        "optim_muon": optim_muon.state_dict(),
+        "optim_muon": optim_muon.state_dict() if optim_muon else None,
         "optim_adam": optim_adam.state_dict(),
         "sched_adam": _sched_adam.state_dict() if _sched_adam else None,
         "sched_muon": _sched_muon.state_dict() if _sched_muon else None,
@@ -208,8 +210,9 @@ def load_checkpoint():
             pass
     if ckpt:
         model.load_state_dict(ckpt["model"])
-        if "optim_muon" in ckpt:
+        if optim_muon and ckpt.get("optim_muon"):
             optim_muon.load_state_dict(ckpt["optim_muon"])
+        if ckpt.get("optim_adam"):
             optim_adam.load_state_dict(ckpt["optim_adam"])
         if _sched_adam and ckpt.get("sched_adam"):
             _sched_adam.load_state_dict(ckpt["sched_adam"])
@@ -222,7 +225,7 @@ _sched_adam = _sched_muon = None
 if args.plateau_patience > 0:
     _kw = dict(mode="min", factor=args.plateau_factor, patience=args.plateau_patience)
     _sched_adam = torch.optim.lr_scheduler.ReduceLROnPlateau(optim_adam, **_kw)
-    _sched_muon = torch.optim.lr_scheduler.ReduceLROnPlateau(optim_muon, **_kw)
+    _sched_muon = torch.optim.lr_scheduler.ReduceLROnPlateau(optim_muon, **_kw) if optim_muon else None
 
 if args.resume:
     load_checkpoint()
@@ -245,11 +248,12 @@ def maybe_decay_lr(val_loss):
     if _sched_adam is None:
         return
     _sched_adam.step(val_loss)
-    _sched_muon.step(val_loss)
+    if _sched_muon:
+        _sched_muon.step(val_loss)
 
 def current_lrs():
-    return (optim_adam.param_groups[0]["lr"],
-            optim_muon.param_groups[0]["lr"])
+    lr_muon = optim_muon.param_groups[0]["lr"] if optim_muon else 0.0
+    return (optim_adam.param_groups[0]["lr"], lr_muon)
 
 # ── training loop ─────────────────────────────────────────────────────────────
 pbar = tqdm(range(start_step, args.max_steps), initial=start_step,
@@ -261,11 +265,13 @@ for step in pbar:
     with autocast:
         _, loss = model(x, y)
 
-    optim_muon.zero_grad(set_to_none=True)
+    if optim_muon:
+        optim_muon.zero_grad(set_to_none=True)
     optim_adam.zero_grad(set_to_none=True)
     loss.backward()
     grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip).item()
-    optim_muon.step()
+    if optim_muon:
+        optim_muon.step()
     optim_adam.step()
     maybe_decay_lr(loss.item())
     _lr_now, _lr_muon_now = current_lrs()
