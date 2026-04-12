@@ -266,7 +266,7 @@ for step in pbar:
     optim_muon.step()
     optim_adam.step()
     maybe_decay_lr(loss.item())
-_lr_now, _lr_muon_now = current_lrs()
+    _lr_now, _lr_muon_now = current_lrs()
     log = {"train/loss": loss.item(), "train/grad_norm": grad_norm,
            "train/lr": _lr_now, "train/lr_muon": _lr_muon_now}
 

@@ -8,7 +8,7 @@ Requirement: 90-day blog post after funding.
 
 ## Project name
 
-Merlin: an open-source 3B language model for agentic coding
+A highly specialized, open-source coding agent — local, private, free
 
 ## One-line description
 
@@ -26,7 +26,7 @@ The design is deliberate:
 - **Post-training**: SFT on agentic traces → RL with verifiable rewards (bash exit codes, file diffs) — no proprietary model distillation, so the weights are clean for commercial use
 - **Inference**: MLX on Apple Silicon; target >500 tok/s on M3
 
-What's already built: full data pipeline (1.19B-token v0 corpus on HuggingFace), custom BPE tokenizer, 49-task agentic eval harness (47% on 3B-scale baseline), task mutation pipeline, SFT infrastructure, and an E2E training loop on H100 via Modal.
+What's already built: full data pipeline, agentic eval harness (49 tasks, 47% on 3B-scale baseline), task mutation pipeline, SFT infrastructure, and an E2E training loop on H100 via Modal.
 
 Total project cost to reach a trained 3B model: ~$5,100 (RunPod for pre-training, Modal CPU for scanning, DeepInfra API for trace generation).
 
@@ -40,13 +40,13 @@ If the full $50K is on offer: add a 7B variant and fund a proper benchmarking st
 
 ## Links
 
-- HuggingFace (tokenizer): https://huggingface.co/tsuberim/merlin-tokenizer-v0
-- HuggingFace (corpus v0): https://huggingface.co/datasets/tsuberim/merlin-corpus-v0
-- GitHub: (will be public before submission)
+- GitHub: https://github.com/tsuberim/merlin
+- Website: https://tsuberim.github.io/merlin/
+- Prior model training work: https://github.com/tsuberim/celeste
 
 ## Prior work / background
 
-Independent developer. Previously built production systems at [fill in]. This project is self-funded to this point — the v0 corpus, tokenizer, and training infrastructure are done on personal compute budget.
+Independent developer. Previously senior engineer at Bionic (raised $350M Series D, acquired by CrowdStrike), working on large-scale security intelligence systems. This project is self-funded — the data pipeline and training infrastructure are done on personal compute budget.
 
 ---
 

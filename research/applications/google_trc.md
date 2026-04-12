@@ -12,7 +12,7 @@ Rolling. Requirement: publish/open-source results.
 
 ## Application text
 
-**Project title:** Merlin: pre-training a 3B agentic coding LLM on TPU
+**Project title:** Merlin — pre-training a coding agent LLM on TPU
 
 **Research summary:**
 

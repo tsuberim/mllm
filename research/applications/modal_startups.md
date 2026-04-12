@@ -9,7 +9,7 @@ Contact: startups@modal.com
 
 ## Email to startups@modal.com
 
-Subject: Compute credits for independent OSS LLM training — eligible?
+Subject: [credits inquiry] A highly specialized, open-source coding agent — local, private, free
 
 Hi Modal team,
 
@@ -19,9 +19,8 @@ I noticed the Startups program is structured around VC funding tiers. I'm bootst
 
 The project is fully open-source (weights, training code, data pipeline, trace dataset). Total compute budget for the full 3B run is ~$5,100, with most of the non-pretraining compute already running on Modal. Happy to share more details or a short writeup.
 
-Existing HuggingFace presence:
-- Tokenizer: https://huggingface.co/tsuberim/merlin-tokenizer-v0
-- Corpus (v0, 1.19B tokens): https://huggingface.co/datasets/tsuberim/merlin-corpus-v0
+- GitHub: https://github.com/tsuberim/merlin
+- Website: https://tsuberim.github.io/merlin/
 
 Thanks,
 Matan

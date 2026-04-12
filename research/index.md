@@ -40,7 +40,7 @@
 
 - [grants.md](grants.md) — cash grants and compute credit programs ranked by fit and urgency (researched April 2026)
 - [grant_pitch.md](grant_pitch.md) — core application materials: one-liner, problem/solution, what's built, budget, agentic AI angle
-- [applications/](applications/) — per-grant drafts: ai_grant, modal_startups, a16z, lambda_labs, coreweave, google_trc, aws_activate
+- [applications/](applications/) — per-grant drafts: ai_grant, modal_startups, a16z, coreweave, google_trc, emergent_ventures, nvidia_inception, pioneer
 - [cost_model.md](cost_model.md) — full 3B run cost breakdown + platform comparison; range ~$4,200 (Vast.ai) to ~$11,200 (CoreWeave); RunPod 8×SXM sweet spot at ~$5,900
 
 ## Metal
