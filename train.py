@@ -30,7 +30,7 @@ parser.add_argument("--eval_every", type=int,   default=None,
 parser.add_argument("--lr",         type=float, default=3e-4,  help="AdamW peak lr (embeddings, norms)")
 parser.add_argument("--lr_muon",    type=float, default=0.02,  help="Muon peak lr (2-D weight matrices)")
 parser.add_argument("--grad_clip",  type=float, default=1.0)
-parser.add_argument("--plateau_patience", type=int,   default=1000, help="steps with no improvement before LR decay (converted to val checks internally; 0 = disabled)")
+parser.add_argument("--plateau_patience", type=int,   default=1000, help="training steps with no improvement in train loss before LR decay (0 = disabled)")
 parser.add_argument("--plateau_factor",   type=float, default=0.5,  help="multiply LR by this on plateau")
 parser.add_argument("--wandb",      choices=["online", "disabled"], default="online")
 parser.add_argument("--bf16",             action="store_true", help="cast model to bfloat16 (required for ~7B on single GPU)")
@@ -200,7 +200,8 @@ def load_checkpoint():
         ckpt = torch.load(CKPT_NAME, map_location=device, weights_only=False)
     elif hf:
         try:
-            path = hf.hf_hub_download(repo_id=HF_REPO, filename=CKPT_NAME, repo_type="model")
+            from huggingface_hub import hf_hub_download
+            path = hf_hub_download(repo_id=HF_REPO, filename=CKPT_NAME, repo_type="model")
             ckpt = torch.load(path, map_location=device, weights_only=False)
             print(f"resumed checkpoint from {HF_REPO}")
         except Exception:
@@ -215,6 +216,13 @@ def load_checkpoint():
             _sched_muon.load_state_dict(ckpt["sched_muon"])
         start_step = ckpt["step"] + 1
         print(f"resumed from step {start_step}")
+
+# ── lr schedule ───────────────────────────────────────────────────────────────
+_sched_adam = _sched_muon = None
+if args.plateau_patience > 0:
+    _kw = dict(mode="min", factor=args.plateau_factor, patience=args.plateau_patience)
+    _sched_adam = torch.optim.lr_scheduler.ReduceLROnPlateau(optim_adam, **_kw)
+    _sched_muon = torch.optim.lr_scheduler.ReduceLROnPlateau(optim_muon, **_kw)
 
 if args.resume:
     load_checkpoint()
@@ -232,13 +240,6 @@ wandb.init(
             "plateau_patience": args.plateau_patience, "plateau_factor": args.plateau_factor,
             "max_steps": args.max_steps, "device": device},
 )
-
-# ── lr schedule ───────────────────────────────────────────────────────────────
-_sched_adam = _sched_muon = None
-if args.plateau_patience > 0:
-    _kw = dict(mode="min", factor=args.plateau_factor, patience=args.plateau_patience)
-    _sched_adam = torch.optim.lr_scheduler.ReduceLROnPlateau(optim_adam, **_kw)
-    _sched_muon = torch.optim.lr_scheduler.ReduceLROnPlateau(optim_muon, **_kw)
 
 def maybe_decay_lr(val_loss):
     if _sched_adam is None:
@@ -291,7 +292,7 @@ for step in pbar:
     else:
         pbar.set_postfix(loss=f"{loss.item():.4f}", gnorm=f"{grad_norm:.2f}")
 
-    if step % args.save_every == 0:
+    if step % args.save_every == 0 and step > 0:
         save_checkpoint(step)
 
     if step % EVAL_EVERY == 0 and step > 0:
