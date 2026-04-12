@@ -1,47 +1,90 @@
+# Muon optimizer — single-device variant.
+# Source: https://github.com/KellerJordan/Muon (SingleDeviceMuon)
 import torch
 
 
-def zeropower_via_newtonschulz5(G: torch.Tensor, steps: int = 5) -> torch.Tensor:
-    """Coefficients from the Muon paper ensure convergence to the polar factor."""
-    assert G.ndim >= 2
-    a, b, c = 3.4445, -4.7750, 2.0315
-    # bfloat16 on CUDA for speed; float32 elsewhere (MPS, CPU)
-    dt = torch.bfloat16 if G.device.type == "cuda" else torch.float32
-    X  = G.to(dt) / (G.norm() + 1e-7)
-    if G.size(0) > G.size(1):
-        X = X.T
+def zeropower_via_newtonschulz5(G, steps: int):
+    """
+    Newton-Schulz iteration to compute the zeroth power / orthogonalization of G. We opt to use a
+    quintic iteration whose coefficients are selected to maximize the slope at zero. For the purpose
+    of minimizing steps, it turns out to be empirically effective to keep increasing the slope at
+    zero even beyond the point where the iteration no longer converges all the way to one everywhere
+    on the interval. This iteration therefore does not produce UV^T but rather something like US'V^T
+    where S' is diagonal with S_{ii}' ~ Uniform(0.5, 1.5), which turns out not to hurt model
+    performance at all relative to UV^T, where USV^T = G is the SVD.
+    """
+    assert G.ndim >= 2 # batched Muon implementation by @scottjmaddox, and put into practice in the record by @YouJiacheng
+    a, b, c = (3.4445, -4.7750,  2.0315)
+    X = G.bfloat16()
+    if G.size(-2) > G.size(-1):
+        X = X.mT
+
+    # Ensure spectral norm is at most 1
+    X = X / (X.norm(dim=(-2, -1), keepdim=True) + 1e-7)
+    # Perform the NS iterations
     for _ in range(steps):
-        A = X @ X.T
-        B = b * A + c * (A @ A)
+        A = X @ X.mT
+        B = b * A + c * A @ A # quintic computation strategy adapted from suggestion by @jxbz, @leloykun, and @YouJiacheng
         X = a * X + B @ X
-    if G.size(0) > G.size(1):
-        X = X.T
-    return X.to(G.dtype)
+
+    if G.size(-2) > G.size(-1):
+        X = X.mT
+    return X
+
+
+def muon_update(grad, momentum, beta=0.95, ns_steps=5, nesterov=True):
+    momentum.lerp_(grad, 1 - beta)
+    update = grad.lerp_(momentum, beta) if nesterov else momentum
+    if update.ndim == 4: # for the case of conv filters
+        update = update.view(len(update), -1)
+    update = zeropower_via_newtonschulz5(update, steps=ns_steps)
+    update *= max(1, update.size(-2) / update.size(-1))**0.5
+    return update
 
 
 class Muon(torch.optim.Optimizer):
-    """Reference: https://github.com/KellerJordan/Muon"""
-    def __init__(self, params, lr: float = 0.02, momentum: float = 0.95,
-                 nesterov: bool = True, ns_steps: int = 3):
-        defaults = dict(lr=lr, momentum=momentum, nesterov=nesterov, ns_steps=ns_steps)
+    """
+    Muon - MomentUm Orthogonalized by Newton-schulz (single-device variant)
+
+    https://kellerjordan.github.io/posts/muon/
+
+    Muon internally runs standard SGD-momentum, and then performs an orthogonalization post-
+    processing step, in which each 2D parameter's update is replaced with the nearest orthogonal
+    matrix. For efficient orthogonalization we use a Newton-Schulz iteration, which has the
+    advantage that it can be stably run in bfloat16 on the GPU.
+
+    Muon should only be used for hidden weight layers. The input embedding, final output layer,
+    and any internal gains or biases should be optimized using a standard method such as AdamW.
+    Hidden convolutional weights can be trained using Muon by viewing them as 2D and then
+    collapsing their last 3 dimensions.
+
+    Arguments:
+        lr: The learning rate, in units of spectral norm per update.
+        weight_decay: The AdamW-style weight decay.
+        momentum: The momentum. A value of 0.95 here is usually fine.
+    """
+    def __init__(self, params, lr=0.02, weight_decay=0, momentum=0.95):
+        defaults = dict(lr=lr, weight_decay=weight_decay, momentum=momentum)
         super().__init__(params, defaults)
 
     @torch.no_grad()
-    def step(self):
+    def step(self, closure=None):
+
+        loss = None
+        if closure is not None:
+            with torch.enable_grad():
+                loss = closure()
+
         for group in self.param_groups:
-            lr, momentum = group["lr"], group["momentum"]
-            nesterov, ns_steps = group["nesterov"], group["ns_steps"]
             for p in group["params"]:
                 if p.grad is None:
-                    continue
-                g = p.grad
+                    # continue
+                    p.grad = torch.zeros_like(p)  # Force synchronization
                 state = self.state[p]
-                if "buf" not in state:
-                    state["buf"] = torch.zeros_like(g)
-                buf = state["buf"]
-                buf.mul_(momentum).add_(g)
-                update = g.add(buf, alpha=momentum) if nesterov else buf.clone()
-                if update.ndim == 2:
-                    update = zeropower_via_newtonschulz5(update, steps=ns_steps)
-                    update *= max(1, update.size(0) / update.size(1)) ** 0.5
-                p.add_(update, alpha=-lr)
+                if len(state) == 0:
+                    state["momentum_buffer"] = torch.zeros_like(p)
+                update = muon_update(p.grad, state["momentum_buffer"], beta=group["momentum"])
+                p.mul_(1 - group["lr"] * group["weight_decay"])
+                p.add_(update.reshape(p.shape), alpha=-group["lr"])
+
+        return loss
