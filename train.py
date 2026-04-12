@@ -149,8 +149,8 @@ for name, p in model.named_parameters():
     else:
         adam_params.append(p)
 
-optim_muon = Muon(muon_params, lr=args.lr_muon)
-optim_adam = torch.optim.AdamW(adam_params, lr=args.lr, betas=(0.9, 0.95), weight_decay=0.1,
+optim_muon = Muon(muon_params, lr=args.lr_muon, weight_decay=0.01)
+optim_adam = torch.optim.AdamW(adam_params, lr=args.lr, betas=(0.9, 0.95), weight_decay=0.01,
                                fused=(device == "cuda"))
 
 # ── sampling ──────────────────────────────────────────────────────────────────
@@ -228,6 +228,7 @@ wandb.init(
     mode=args.wandb,
     config={**model_cfg.__dict__, "batch_size": args.batch_size,
             "lr": args.lr, "lr_muon": args.lr_muon,
+            "weight_decay": 0.01,
             "plateau_patience": args.plateau_patience, "plateau_factor": args.plateau_factor,
             "max_steps": args.max_steps, "device": device},
 )
