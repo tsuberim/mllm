@@ -76,6 +76,7 @@ class Attention(nn.Module):
         self.q_proj  = nn.Linear(cfg.n_embd, cfg.n_head * self.head_dim, bias=False)
         self.kv_proj = nn.Linear(cfg.n_embd, 2 * cfg.n_kv_head * self.head_dim, bias=False)
         self.proj    = nn.Linear(cfg.n_embd, cfg.n_embd, bias=False)
+        self.proj.is_residual = True
         cos, sin = precompute_rope_freqs(self.head_dim, cfg.block_size)
         self.register_buffer("rope_cos", cos)
         self.register_buffer("rope_sin", sin)
@@ -107,6 +108,7 @@ class MLP(nn.Module):
         self.w1 = nn.Linear(cfg.n_embd, hidden, bias=False)
         self.w2 = nn.Linear(cfg.n_embd, hidden, bias=False)
         self.w3 = nn.Linear(hidden, cfg.n_embd, bias=False)
+        self.w3.is_residual = True
 
     def forward(self, x):
         return self.w3(F.silu(self.w1(x)) * self.w2(x))
@@ -135,13 +137,13 @@ class GPT(nn.Module):
         self.blocks  = nn.ModuleList([Block(cfg) for _ in range(cfg.n_layer)])
         self.norm    = RMSNorm(cfg.n_embd)
         self.head    = nn.Linear(cfg.n_embd, cfg.vocab_size, bias=False)
-        self.tok_emb.weight = self.head.weight  # weight tying
-
         self.apply(self._init_weights)
+        self.tok_emb.weight = self.head.weight  # tie after init
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
-            nn.init.normal_(m.weight, std=0.02)
+            std = 0.02 / (2 * self.cfg.n_layer) ** 0.5 if getattr(m, "is_residual", False) else 0.02
+            nn.init.normal_(m.weight, std=std)
         elif isinstance(m, nn.Embedding):
             nn.init.normal_(m.weight, std=0.02)
 
