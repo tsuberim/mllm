@@ -11,6 +11,7 @@ Usage:
 
 import argparse
 import os
+import readline  # noqa: F401 — enables up-arrow history in input()
 import sys
 from pathlib import Path
 

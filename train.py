@@ -28,7 +28,7 @@ parser.add_argument("--save_every", type=int,   required=True)
 parser.add_argument("--eval_every", type=int,   default=None,
                     help="run checkpoint eval every N steps (default: same as save_every)")
 parser.add_argument("--lr",         type=float, default=1e-4,  help="AdamW peak lr (embeddings, norms)")
-parser.add_argument("--lr_muon",    type=float, default=0.02,  help="Muon peak lr (2-D weight matrices)")
+parser.add_argument("--lr_muon",    type=float, default=0.005, help="Muon peak lr (2-D weight matrices)")
 parser.add_argument("--grad_clip",  type=float, default=1.0)
 parser.add_argument("--plateau_patience", type=int,   default=500,  help="training steps with no improvement in train loss before LR decay (0 = disabled)")
 parser.add_argument("--plateau_factor",   type=float, default=0.25, help="multiply LR by this on plateau")

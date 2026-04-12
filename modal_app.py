@@ -1121,7 +1121,7 @@ def generate_task_dataset(
 def main(
     commit: str = "",
     model: str = "experiment",
-    batch_size: int = 128,
+    batch_size: int = 40,
     max_steps: int = 20000,
     val_every: int = 2000,
     val_steps: int = 5,
