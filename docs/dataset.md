@@ -3,23 +3,25 @@
 ## v1 Target Corpus (planned)
 
 Target: **~100B tokens** across high-quality code, technical NL, math, and instruction data.
-Selection strategy: The Stack v2 is already license-filtered, deduplicated, and curated by BigCode — no quality classifier needed. Token budgets per language are hit via random sampling. Minimal filters applied only where the source has known noise (generated files, non-English, pure data dumps).
+Selection strategy: The Stack v1 (`the-stack-dedup`) is license-filtered, near-deduplicated, and curated by BigCode — no quality classifier needed. Token budgets per language are hit via random sampling. Minimal filters applied only where the source has known noise (generated files, non-English, pure data dumps).
+
+**Note on The Stack v2:** v2 has better quality signals (`is_generated`, `is_vendor`, star counts) but bulk access requires a ≥50K€ Software Heritage membership fee (confirmed April 2026). Using v1 instead — quality difference at this corpus scale is marginal.
 
 ### Code (~54%)
 
-Token budgets are sampled randomly from each source to hit the target; Stack v2 raw sizes from the StarCoder2 paper.
+Token budgets are sampled randomly from each source to hit the target; Stack v1 raw sizes from the StarCoder paper.
 
 | Source | License | Token budget | Filter |
 |---|---|---|---|
-| The Stack v2 — Python | Apache 2.0 | 20B | `is_generated=false`, `is_vendor=false` |
-| The Stack v2 — TypeScript | Apache 2.0 | 5B | `is_generated=false` |
-| The Stack v2 — Go | Apache 2.0 | 3B | `is_generated=false` |
-| The Stack v2 — Rust | Apache 2.0 | 2B | `is_generated=false` |
-| The Stack v2 — Bash/Shell | Apache 2.0 | 2B | `is_generated=false`, ≥2 commands |
-| The Stack v2 — YAML | Apache 2.0 | 2B | CI/docker/k8s files only |
-| The Stack v2 — Dockerfile | Apache 2.0 | 0.3B | passthrough |
-| The Stack v2 — SQL | Apache 2.0 | 3B | has SELECT/INSERT/CREATE, no pure data dumps |
-| The Stack v2 — Markdown | Apache 2.0 | 5B | English, has code block, no templates |
+| The Stack v1 — Python | Apache 2.0 | 20B | `alphanum_fraction>0.15`, no generated files |
+| The Stack v1 — TypeScript | Apache 2.0 | 5B | passthrough |
+| The Stack v1 — Go | Apache 2.0 | 3B | passthrough |
+| The Stack v1 — Rust | Apache 2.0 | 2B | passthrough |
+| The Stack v1 — Bash/Shell | Apache 2.0 | 2B | ≥2 commands |
+| The Stack v1 — YAML | Apache 2.0 | 2B | CI/docker/k8s files only |
+| The Stack v1 — Dockerfile | Apache 2.0 | 0.3B | passthrough |
+| The Stack v1 — SQL | Apache 2.0 | 3B | has SELECT/INSERT/CREATE, no pure data dumps |
+| The Stack v1 — Markdown | Apache 2.0 | 5B | English, has code block, no templates |
 | Jupyter notebooks (executed) | varies | 10B | has cell outputs + markdown cells |
 | PyPI package READMEs | varies | 0.3B | has code examples |
 | GitHub issues + commits | Apache 2.0 | 1.5B | non-trivial messages only. **Format limitation**: commits are `# <subject>\n\n<new_file_contents>` — post-commit file state only, no diff or before-state. Consider augmenting with raw `git diff` output or a before/after pair dataset for stronger edit-understanding signal. |
@@ -74,6 +76,7 @@ Token budgets are sampled randomly from each source to hit the target; Stack v2 
 | FLAN v2 (code + reasoning subsets) | Apache 2.0 | 3B | no LLM outputs |
 | Natural Instructions v2 | Apache 2.0 | 1.5B | 1600+ task types |
 | OpenHermes 2.5 | Apache 2.0 | 1B | Mistral-generated, not GPT-4; actual ~0.7–1B |
+| NL2Bash | MIT | 0.01B | ~10K NL→bash pairs; small but clean command grounding signal |
 
 ### Math (~6%)
 
@@ -108,7 +111,7 @@ Token budgets are sampled randomly from each source to hit the target; Stack v2 
 
 ### Quality strategy
 
-- **Stack v2**: already license-filtered, near-deduped, and curated by BigCode. Random sample to token budget. Only apply `is_generated=false` and `is_vendor=false` flags that are already in the dataset.
+- **Stack v1**: already license-filtered, near-deduped, and curated by BigCode. Random sample to token budget. `alphanum_fraction>0.15` on Python to filter data files.
 - **Q&A**: accepted answers only + score threshold — human-curation signal already baked in.
 - **Cross-source dedup**: MinHash LSH dedup across all sources before packing — Stack v2 Python, Jupyter notebooks, and PyPI READMEs all overlap.
 - **Docstring examples** (`>>>` lines): extract and deduplicate as a free filter pass — verified running code.
