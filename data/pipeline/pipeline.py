@@ -49,7 +49,9 @@ EXPERIMENT_CAPS = {
     "stackoverflow":    600_000,
     "github_commits":   200_000,
     "github_issues":    150_000,
-    "tldr":            None,   # small enough to always run in full
+    "jupyter":           50_000,  # executed notebooks with outputs
+    "nl2bash":             None,  # ~10K pairs; always run in full
+    "tldr":                None,  # small enough to always run in full
 }
 
 
@@ -423,6 +425,97 @@ class _IssueFormatter(BaseFilter):
         return True
 
 
+def _jupyter_pipeline(out_dir: Path, full: bool, workers: int, logs: Path, limit_override=None):
+    """Executed Jupyter notebooks: code cells + stdout/text outputs + markdown."""
+    cap = limit_override if limit_override is not None else (None if full else EXPERIMENT_CAPS["jupyter"])
+    limit = cap if cap is not None else -1
+
+    def _adapter(self, data: dict, path: str, id_in_file: int) -> dict | None:
+        cells = data.get("cells") or []
+        if not cells:
+            return None
+        parts = []
+        has_output = False
+        has_markdown = False
+        for cell in cells:
+            ctype = cell.get("cell_type", "")
+            src   = "".join(cell.get("source") or []).strip()
+            if not src:
+                continue
+            if ctype == "markdown":
+                has_markdown = True
+                parts.append(src)
+            elif ctype == "code":
+                parts.append(src)
+                outputs = cell.get("outputs") or []
+                for out in outputs:
+                    # stream (stdout/stderr) or execute_result/display_data
+                    text = out.get("text") or out.get("data", {}).get("text/plain") or []
+                    text = "".join(text).strip()
+                    if text:
+                        has_output = True
+                        parts.append(f"# output:\n# " + "\n# ".join(text.splitlines()))
+        if not has_output or not has_markdown:
+            return None
+        return {
+            "text": "\n\n".join(parts),
+            "id":   data.get("id") or f"{path}/{id_in_file}",
+            "metadata": {},
+        }
+
+    class JupyterFilter(BaseFilter):
+        name = "Jupyter Filter"
+        def filter(self, doc: Document):
+            if len(doc.text) < 200:
+                return False, "too short"
+            if len(doc.text) > 500_000:
+                return False, "too large"
+            return True
+
+    pipeline = [
+        HuggingFaceDatasetReader(
+            # bigcode/jupyter-structured-cleaned-dedup: ~2.7M executed notebooks
+            dataset="bigcode/jupyter-structured-cleaned-dedup",
+            dataset_options={"split": "train"},
+            adapter=_adapter,
+            streaming=True,
+            limit=limit,
+        ),
+        JupyterFilter(),
+        JsonlWriter(output_folder=str(out_dir / "jupyter")),
+    ]
+    return LocalPipelineExecutor(pipeline=pipeline, tasks=workers, logging_dir=str(logs / "jupyter"))
+
+
+def _nl2bash_pipeline(out_dir: Path, workers: int, logs: Path, limit_override=None):
+    """NL2Bash: ~10K natural-language → bash command pairs. Format: # <nl>\n<cmd>."""
+
+    def _adapter(self, data: dict, path: str, id_in_file: int) -> dict | None:
+        nl  = (data.get("cmd_str") or data.get("invocation_desc") or "").strip()
+        cmd = (data.get("invocation") or data.get("cmd") or "").strip()
+        if not nl or not cmd:
+            return None
+        return {
+            "text": f"# {nl}\n{cmd}",
+            "id":   str(id_in_file),
+            "metadata": {},
+        }
+
+    pipeline = [
+        HuggingFaceDatasetReader(
+            # Lin et al. 2018 NL2Bash dataset (~10K NL→bash pairs, MIT)
+            # HF ID: bigcode/natural-language-queries (bash subset)
+            dataset="bigcode/natural-language-queries",
+            dataset_options={"split": "train"},
+            adapter=_adapter,
+            streaming=True,
+            limit=limit_override if limit_override is not None else -1,
+        ),
+        JsonlWriter(output_folder=str(out_dir / "nl2bash")),
+    ]
+    return LocalPipelineExecutor(pipeline=pipeline, tasks=workers, logging_dir=str(logs / "nl2bash"))
+
+
 def _tldr_pipeline(out_dir: Path, logs: Path):
     """tldr-pages: read from a cloned repo directory."""
     pipeline = [
@@ -434,7 +527,7 @@ def _tldr_pipeline(out_dir: Path, logs: Path):
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
 
-ALL_SOURCES = ["stack_python", "stack_bash", "stack_md", "stackoverflow", "github_commits", "github_issues"]
+ALL_SOURCES = ["stack_python", "stack_bash", "stack_md", "stackoverflow", "github_commits", "github_issues", "jupyter", "nl2bash"]
 
 def main():
     parser = argparse.ArgumentParser(description="DataTrove corpus pipeline: download + filter")
@@ -473,6 +566,10 @@ def main():
             executor = _github_commits_pipeline(out_dir, args.full, args.workers, logs_dir, args.limit)
         elif source == "github_issues":
             executor = _github_issues_pipeline(out_dir, args.full, args.workers, logs_dir, args.limit)
+        elif source == "jupyter":
+            executor = _jupyter_pipeline(out_dir, args.full, args.workers, logs_dir, args.limit)
+        elif source == "nl2bash":
+            executor = _nl2bash_pipeline(out_dir, args.workers, logs_dir, args.limit)
         else:
             print(f"  {source}: not yet implemented")
             continue

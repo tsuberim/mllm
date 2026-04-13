@@ -315,7 +315,7 @@ def tokenize_phase2(commit: str) -> dict:
 )
 def build_corpus(
     commit: str,
-    sources: str = "stack_python,stack_bash,stack_md,stackoverflow,github_commits,github_issues",
+    sources: str = "stack_python,stack_bash,stack_md,stackoverflow,github_commits,github_issues,jupyter,nl2bash",
     full: bool = False,
     workers: int = 28,
     hf_corpus_repo: str = "tsuberim/merlin-corpus-v1",
@@ -615,7 +615,7 @@ def sft_entrypoint(
 @app.local_entrypoint()
 def build_corpus_entrypoint(
     commit: str = "",
-    sources: str = "stack_python,stack_bash,stack_md,stackoverflow,github_commits,github_issues",
+    sources: str = "stack_python,stack_bash,stack_md,stackoverflow,github_commits,github_issues,jupyter,nl2bash",
     full: bool = False,
     workers: int = 28,
     hf_corpus_repo: str = "tsuberim/merlin-corpus-v1",
