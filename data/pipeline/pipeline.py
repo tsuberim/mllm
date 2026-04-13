@@ -617,23 +617,24 @@ def _fineweb_edu_pipeline(out_dir: Path, full: bool, workers: int, logs: Path, l
 # ── ArXiv CS ──────────────────────────────────────────────────────────────────
 
 def _arxiv_adapter(self, data: dict, path: str, id_in_file: int) -> dict:
-    # allenai/peS2o schema: text, id, title, year
+    # RedPajama schema: text (str), meta (JSON string with pile_set_name)
     text = (data.get("text") or "").strip()
     if not text:
         return _SKIP
     return {
         "text": text[:MAX_FILE_BYTES],
-        "id":   data.get("id") or str(id_in_file),
+        "id":   str(id_in_file),
         "metadata": {},
     }
 
 def _arxiv_pipeline(out_dir: Path, full: bool, workers: int, logs: Path, limit_override=None):
     cap   = limit_override if limit_override is not None else (None if full else EXPERIMENT_CAPS["arxiv"])
     limit = cap if cap is not None else -1
-    # allenai/peS2o: S2ORC scientific papers, clean parquet format, no loading script
+    # RedPajama-Data-1T-Sample: clean Parquet, no loading script, contains ArXiv + other
+    # scientific/technical text. scientific_papers and peS2o both use deprecated scripts.
     pipeline = [
         HuggingFaceDatasetReader(
-            dataset="allenai/peS2o",
+            dataset="togethercomputer/RedPajama-Data-1T-Sample",
             dataset_options={"split": "train"},
             adapter=_arxiv_adapter,
             streaming=True,
