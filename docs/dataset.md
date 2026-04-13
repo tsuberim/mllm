@@ -22,7 +22,7 @@ Token budgets are sampled randomly from each source to hit the target; Stack v2 
 | The Stack v2 — Markdown | Apache 2.0 | 5B | English, has code block, no templates |
 | Jupyter notebooks (executed) | varies | 10B | has cell outputs + markdown cells |
 | PyPI package READMEs | varies | 0.3B | has code examples |
-| GitHub issues + commits | Apache 2.0 | 1.5B | non-trivial messages only |
+| GitHub issues + commits | Apache 2.0 | 1.5B | non-trivial messages only. **Format limitation**: commits are `# <subject>\n\n<new_file_contents>` — post-commit file state only, no diff or before-state. Consider augmenting with raw `git diff` output or a before/after pair dataset for stronger edit-understanding signal. |
 | Rosetta Code + Exercism | Apache 2.0 | 0.2B | passthrough |
 | Papers with Code | CC BY-SA | 0.5B | arXiv abstract + methods section |
 

@@ -14,6 +14,21 @@ python bench.py --bits 4        # int4 quantized
 2. **Infer**: `python infer.py --model 3b --weights weights_3b.npz --prompt "..."`
 3. **Bench**: `python bench.py --model experiment --weights checkpoints/weights.npz --bits 4`
 
+## Benchmarks (3b model, ~3.17B params, random weights, fp16, M-series Mac)
+
+Batched decode TPS — measures throughput with N concurrent conversations (same prompt duplicated, only first output shown). Memory is fixed since KV cache is pre-allocated.
+
+| Batch size | TPS | Peak mem |
+|---|---|---|
+| 4 | 17.3 | 5934 MB |
+| 8 | 17.1 | 5934 MB |
+| 16 | 16.7 | 5934 MB |
+| 32 | 14.5 | 5934 MB |
+| 64 | 11.9 | 5934 MB |
+| 128 | 6.1 | 5934 MB |
+
+TPS is roughly flat up to batch=16, then declines — consistent with memory bandwidth saturation around batch=32. At batch=64, throughput is ~69% of single-batch, meaning 64 parallel conversations deliver ~44× the single-conversation output rate.
+
 ## Benchmarks (experiment model, ~21M params, M4 MPS)
 
 | Setup | TPS | Peak mem |

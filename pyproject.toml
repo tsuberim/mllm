@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "merlin-llm"
+version = "0.1.11"
+description = "Merlin — a fast local LLM for agentic coding on Apple Silicon"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+dependencies = [
+    "mlx>=0.22",
+    "numpy",
+    "huggingface-hub",
+    "tokenizers",
+    "python-dotenv",
+]
+
+[project.scripts]
+merlin = "merlin.repl:main"
+
+[tool.setuptools.packages.find]
+include = ["merlin*"]

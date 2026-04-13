@@ -19,11 +19,11 @@ import mlx.core as mx
 import numpy as np
 from mlx.utils import tree_flatten
 
-import tok as _tok
-from infer import Config, GPT, load_model
+from merlin import tok as _tok
+from merlin.infer import Config, GPT, load_model
 
 HF_MODEL_REPO  = os.environ.get("HF_REPO", "tsuberim/merlin")
-WEIGHTS_CACHE  = Path("checkpoints/weights")   # local cache for converted .npz files
+WEIGHTS_CACHE  = Path.home() / ".cache" / "merlin" / "weights"
 
 # ── weight conversion ─────────────────────────────────────────────────────────
 
@@ -63,11 +63,13 @@ def latest_tag() -> str:
     """Return the tag of the most recently pushed checkpoint on HF."""
     from huggingface_hub import HfApi
     api = HfApi(token=os.environ.get("HF_TOKEN"))
-    files = list(api.list_repo_tree(HF_MODEL_REPO, repo_type="model", recursive=True))
-    ckpts = [f for f in files if f.path.startswith("checkpoints/ckpt_") and f.path.endswith(".pt")]
-    if not ckpts:
+    all_files = list(api.list_repo_files(HF_MODEL_REPO, repo_type="model"))
+    ckpt_paths = [f for f in all_files if f.startswith("checkpoints/ckpt_") and f.endswith(".pt")]
+    if not ckpt_paths:
         raise RuntimeError(f"No checkpoints found in {HF_MODEL_REPO}")
-    latest = max(ckpts, key=lambda f: f.last_commit.date)
+    infos = list(api.get_paths_info(HF_MODEL_REPO, ckpt_paths, repo_type="model"))
+    dated = [f for f in infos if f.last_commit is not None]
+    latest = max(dated, key=lambda f: f.last_commit.date) if dated else infos[-1]
     return latest.path.removeprefix("checkpoints/ckpt_").removesuffix(".pt")
 
 
@@ -97,7 +99,15 @@ def resolve_weights(tag: str) -> Path:
     pt_path = WEIGHTS_CACHE / f"{tag}.pt"
     shutil.copy(hf_path, pt_path)
     _convert(pt_path, npz_path)
+    pt_path.unlink()  # don't keep the .pt after conversion
     sha_path.write_text(blob_sha)
+
+    # evict oldest checkpoints, keep 3 most recent
+    npzs = sorted(WEIGHTS_CACHE.glob("*.npz"), key=lambda p: p.stat().st_mtime, reverse=True)
+    for old in npzs[3:]:
+        old.unlink(missing_ok=True)
+        old.with_suffix(".sha").unlink(missing_ok=True)
+
     return npz_path
 
 
@@ -112,7 +122,7 @@ def _sample(logits: mx.array, temperature: float) -> mx.array:
 def stream_generate(model: GPT, idx: mx.array, max_new: int, temperature: float):
     """Yield tokens one at a time for streaming output."""
     # allocate only what we need: avoids 1.7GB KV for block_size=4096 on a 7B model
-    cache = model.make_cache(max_T=idx.shape[1] + max_new)
+    cache = model.make_cache(max_T=idx.shape[1] + max_new, batch_size=idx.shape[0])
     logits, cache = model(idx, cache)
     next_tok = _sample(logits[:, -1, :], temperature)
     mx.eval(next_tok, *[c.k for c in cache], *[c.v for c in cache])
@@ -128,10 +138,10 @@ def stream_generate(model: GPT, idx: mx.array, max_new: int, temperature: float)
 # ── REPL ──────────────────────────────────────────────────────────────────────
 
 BANNER = """
-merlin repl  (ctrl-d or /quit to exit)
+merlin repl  (ctrl-d or /quit to exit, /temp <value>, /batch <n>)
 """
 
-def run_repl(model: GPT, enc, max_new: int, temperature: float):
+def run_repl(model: GPT, enc, max_new: int, temperature: float, batch_size: int = 1):
     print(BANNER)
     while True:
         try:
@@ -142,6 +152,28 @@ def run_repl(model: GPT, enc, max_new: int, temperature: float):
 
         if user == "/quit":
             break
+        if user.startswith("/temp"):
+            parts = user.split()
+            if len(parts) == 2:
+                try:
+                    temperature = float(parts[1])
+                    print(f"(temperature: {temperature})")
+                except ValueError:
+                    print("usage: /temp <float>")
+            else:
+                print(f"(temperature: {temperature})")
+            continue
+        if user.startswith("/batch"):
+            parts = user.split()
+            if len(parts) == 2:
+                try:
+                    batch_size = int(parts[1])
+                    print(f"(batch_size: {batch_size})")
+                except ValueError:
+                    print("usage: /batch <int>")
+            else:
+                print(f"(batch_size: {batch_size})")
+            continue
         if not user:
             continue
 
@@ -152,7 +184,7 @@ def run_repl(model: GPT, enc, max_new: int, temperature: float):
         if len(prompt_ids) > max_prompt:
             prompt_ids = prompt_ids[-max_prompt:]
 
-        idx = mx.array([prompt_ids])
+        idx = mx.array([prompt_ids] * batch_size)
         # move cursor up to end of input line; emit the \n we appended to prompt
         col = len("> ") + len(user) + 1
         print(f"\033[1A\033[{col}G", end="", flush=True)
@@ -182,14 +214,15 @@ def run_repl(model: GPT, enc, max_new: int, temperature: float):
 
 # ── entrypoint ────────────────────────────────────────────────────────────────
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
+def main():
+    parser = argparse.ArgumentParser(prog="merlin")
     parser.add_argument("--model",       choices=["sanity", "experiment", "3b", "7b"],
                         default="experiment")
     parser.add_argument("--tag",         default=None, help="checkpoint tag (default: latest on HF)")
     parser.add_argument("--weights",     default=None, help="path to pre-converted .npz")
     parser.add_argument("--max_new",     type=int,   default=256)
     parser.add_argument("--temperature", type=float, default=0.8)
+    parser.add_argument("--batch_size",  type=int,   default=1, help="batch size for TPS benchmarking (duplicates input)")
     parser.add_argument("--bits",        type=int,   default=16, choices=[0, 4, 8, 16])
     parser.add_argument("--random",      action="store_true", help="use random weights (for benchmarking)")
     args = parser.parse_args()
@@ -203,10 +236,20 @@ if __name__ == "__main__":
 
     enc = _tok.load()
 
+    # resolve tag before deciding load path
+    tag = None
+    if not args.random and not args.weights:
+        if args.tag:
+            tag = args.tag
+        elif args.model == "experiment":
+            tag = latest_tag()
+        else:
+            print(f"no checkpoint for --model {args.model}, using random weights")
+            args.random = True
+
     if args.random:
         from mlx.nn import quantize
         model = GPT(cfg)
-        # cast before mx.eval so we never materialize the full fp32 blob
         dtype = {16: mx.float16, 0: mx.float32}.get(args.bits, mx.float32)
         if dtype != mx.float32:
             model.load_weights([(k, v.astype(dtype)) for k, v in tree_flatten(model.parameters())])
@@ -220,7 +263,6 @@ if __name__ == "__main__":
         print(f"loading {args.weights} ...")
         model = load_model(args.weights, cfg, bits=args.bits)
     else:
-        tag = args.tag or latest_tag()
         print(f"checkpoint: {tag}")
         weights_path = str(resolve_weights(tag))
         print(f"loading {weights_path} ...")
@@ -229,14 +271,16 @@ if __name__ == "__main__":
     nparams = sum(v.size for _, v in tree_flatten(model.parameters()))
     print(f"model: {args.model}  params: {nparams:,}")
 
-    # warmup: compile decode graph (T=1) before user starts typing;
-    # first-pass Metal shader compilation for a 7B model takes 30-120s
     print("warming up...", end="", flush=True)
     _w = mx.zeros((1, 1), dtype=mx.uint32)
-    _wc = model.make_cache(max_T=args.max_new + 1)
+    _wc = model.make_cache(max_T=args.max_new + 1, batch_size=1)
     model(_w, _wc)
     mx.eval(model.parameters())
     del _w, _wc
     print(" done")
 
-    run_repl(model, enc, args.max_new, args.temperature)
+    run_repl(model, enc, args.max_new, args.temperature, args.batch_size)
+
+
+if __name__ == "__main__":
+    main()
