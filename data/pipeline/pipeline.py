@@ -189,38 +189,47 @@ def _github_issues_pipeline(out_dir: Path, full: bool, workers: int, logs: Path,
 # ── jupyter notebooks ─────────────────────────────────────────────────────────
 
 def _jupyter_adapter(self, data: dict, path: str, id_in_file: int) -> dict | None:
-    cells = data.get("cells") or []
-    parts = []
-    for cell in cells:
-        if isinstance(cell, str):
+    try:
+        cells = data.get("cells") or []
+        parts = []
+        for cell in cells:
             try:
-                cell = json.loads(cell)
+                if isinstance(cell, str):
+                    cell = json.loads(cell)
+                if not isinstance(cell, dict):
+                    continue
+                ctype = cell.get("cell_type") or ""
+                src_raw = cell.get("source") or ""
+                src = ("".join(src_raw) if isinstance(src_raw, list) else str(src_raw)).strip()
+                if not src:
+                    continue
+                if ctype == "code":
+                    parts.append(src)
+                    for out in (cell.get("outputs") or []):
+                        try:
+                            if not isinstance(out, dict):
+                                continue
+                            text = out.get("text") or (out.get("data") or {}).get("text/plain") or []
+                            if isinstance(text, list):
+                                text = "".join(text)
+                            text = str(text).strip()
+                            if text:
+                                parts.append("# output:\n# " + "\n# ".join(text.splitlines()))
+                        except Exception:
+                            continue
+                else:
+                    parts.append(src)
             except Exception:
                 continue
-        if not isinstance(cell, dict):
-            continue
-        ctype = cell.get("cell_type", "")
-        src   = "".join(cell.get("source") or []).strip()
-        if not src:
-            continue
-        if ctype == "code":
-            parts.append(src)
-            for out in (cell.get("outputs") or []):
-                if not isinstance(out, dict):
-                    continue
-                text = out.get("text") or out.get("data", {}).get("text/plain") or []
-                text = "".join(text).strip()
-                if text:
-                    parts.append("# output:\n# " + "\n# ".join(text.splitlines()))
-        else:
-            parts.append(src)
-    if not parts:
+        if not parts:
+            return None
+        return {
+            "text": "\n\n".join(parts)[:MAX_FILE_BYTES],
+            "id":   data.get("id") or f"{path}/{id_in_file}",
+            "metadata": {},
+        }
+    except Exception:
         return None
-    return {
-        "text": "\n\n".join(parts)[:MAX_FILE_BYTES],
-        "id":   data.get("id") or f"{path}/{id_in_file}",
-        "metadata": {},
-    }
 
 def _jupyter_pipeline(out_dir: Path, full: bool, workers: int, logs: Path, limit_override=None):
     cap   = limit_override if limit_override is not None else (None if full else EXPERIMENT_CAPS["jupyter"])
