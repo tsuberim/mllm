@@ -920,27 +920,38 @@ def _papers_with_code_pipeline(out_dir: Path, logs: Path, limit=None):
         print("papers_with_code: already done, skipping")
         return
 
-    url = "https://production-media.paperswithcode.com/about/papers-with-abstracts.json.gz"
-    raw = None
-    for ctx in (None, _SSL_UNVERIFIED):
-        try:
-            print(f"papers_with_code: downloading {url} ...")
-            with urllib.request.urlopen(url, context=ctx, timeout=120) as resp:
-                raw = resp.read()
-            break
-        except Exception as e:
-            print(f"papers_with_code: attempt failed: {e}")
-    if raw is None:
-        print("papers_with_code: all download attempts failed — skipping")
-        done_flag.touch()
-        return
-
+    # Primary source: J0nasW/paperswithcode on HuggingFace (44K papers, no SSL issues)
+    # Fallback: production-media.paperswithcode.com (often blocked by SSL)
+    papers = []
     try:
-        papers = json.loads(gzip.decompress(raw))
+        from datasets import load_dataset
+        ds = load_dataset("J0nasW/paperswithcode", data_files="papers_train.csv", split="train")
+        papers = list(ds)
+        print(f"papers_with_code: loaded {len(papers)} papers from HF (J0nasW/paperswithcode)")
     except Exception as e:
-        print(f"papers_with_code: parse failed: {e} — skipping")
-        done_flag.touch()
-        return
+        print(f"papers_with_code: HF load failed: {e} — trying direct download ...")
+
+    if not papers:
+        url = "https://production-media.paperswithcode.com/about/papers-with-abstracts.json.gz"
+        raw = None
+        for ctx in (None, _SSL_UNVERIFIED):
+            try:
+                print(f"papers_with_code: downloading {url} ...")
+                with urllib.request.urlopen(url, context=ctx, timeout=120) as resp:
+                    raw = resp.read()
+                break
+            except Exception as e:
+                print(f"papers_with_code: attempt failed: {e}")
+        if raw is None:
+            print("papers_with_code: all download attempts failed — skipping")
+            done_flag.touch()
+            return
+        try:
+            papers = json.loads(gzip.decompress(raw))
+        except Exception as e:
+            print(f"papers_with_code: parse failed: {e} — skipping")
+            done_flag.touch()
+            return
 
     cap = limit if limit is not None else EXPERIMENT_CAPS.get("papers_with_code")
     out_file = out_path / "papers_with_code.jsonl.gz"
@@ -1094,51 +1105,32 @@ def _nl2bash_pipeline(out_dir: Path, logs: Path):
 
     records = []
 
-    # Attempt 1: HF parquet (script-based datasets deprecated in recent datasets versions)
+    # Attempt 1: Dropbox zip (original source used by jiacheng-ye/nl2bash HF script)
+    # Contains nl2bash/train.json + dev.json + test.json with {"nl":..., "bash":...} entries
     try:
-        from datasets import load_dataset
-        ds = load_dataset("jiacheng-ye/nl2bash", split="train", trust_remote_code=True)
-        records = list(ds)
-        print(f"nl2bash: loaded {len(records)} records from HF (trust_remote_code)")
+        dropbox_url = "https://www.dropbox.com/s/wy7uahzbir7lrq1/nl2bash.zip?dl=1"
+        print(f"nl2bash: downloading {dropbox_url} ...")
+        with urllib.request.urlopen(dropbox_url, timeout=120) as resp:
+            raw = resp.read()
+        with zipfile.ZipFile(io.BytesIO(raw)) as zf:
+            for split in ("train", "dev", "test"):
+                fname = f"nl2bash/{split}.json"
+                if fname in zf.namelist():
+                    data = json.loads(zf.read(fname))
+                    records.extend(data)
+        print(f"nl2bash: loaded {len(records)} records from Dropbox zip")
     except Exception as e:
-        print(f"nl2bash: HF trust_remote_code failed: {e}")
+        print(f"nl2bash: Dropbox zip failed: {e}")
 
-    # Attempt 2: HF parquet files directly
+    # Attempt 2: HF trust_remote_code (works on older datasets versions)
     if not records:
         try:
             from datasets import load_dataset
-            ds = load_dataset("parquet",
-                              data_files="hf://datasets/jiacheng-ye/nl2bash/**/*.parquet",
-                              split="train")
+            ds = load_dataset("jiacheng-ye/nl2bash", split="train", trust_remote_code=True)
             records = list(ds)
-            print(f"nl2bash: loaded {len(records)} records from HF parquet")
+            print(f"nl2bash: loaded {len(records)} records from HF (trust_remote_code)")
         except Exception as e:
-            print(f"nl2bash: HF parquet failed: {e}")
-
-    # Attempt 3: TellinaTool GitHub — paired .nl/.cm files (one entry per line)
-    if not records:
-        try:
-            base = "https://raw.githubusercontent.com/TellinaTool/nl2bash/master/data"
-            splits = ["train", "dev", "test"]
-            nl_lines, cm_lines = [], []
-            for split in splits:
-                for ctx in (None, _SSL_UNVERIFIED):
-                    try:
-                        with urllib.request.urlopen(f"{base}/{split}.nl", context=ctx, timeout=60) as r:
-                            nl_lines += r.read().decode().splitlines()
-                        with urllib.request.urlopen(f"{base}/{split}.cm", context=ctx, timeout=60) as r:
-                            cm_lines += r.read().decode().splitlines()
-                        break
-                    except Exception:
-                        pass
-            if nl_lines and len(nl_lines) == len(cm_lines):
-                records = [{"nl": nl.strip(), "bash": cm.strip()}
-                           for nl, cm in zip(nl_lines, cm_lines) if nl.strip() and cm.strip()]
-                print(f"nl2bash: loaded {len(records)} records from GitHub .nl/.cm files")
-            else:
-                print(f"nl2bash: GitHub nl/cm mismatch: {len(nl_lines)} nl vs {len(cm_lines)} cm")
-        except Exception as e:
-            print(f"nl2bash: GitHub raw failed: {e}")
+            print(f"nl2bash: HF trust_remote_code failed: {e}")
 
     if not records:
         print("nl2bash: WARNING — all fetch methods failed, skipping")
