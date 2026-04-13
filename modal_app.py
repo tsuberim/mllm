@@ -326,7 +326,8 @@ def build_corpus(
         "fineweb_edu,arxiv,wikipedia,"
         "flan_v2,natural_instructions,openhermes,nl2bash,"
         "numinamath,competition_math,proof_pile,"
-        "papers_with_code,pypi_readmes,fastai_notebooks,python_ds_handbook,sicp"
+        "papers_with_code,pypi_readmes,fastai_notebooks,python_ds_handbook,sicp,"
+        "deepmind_math,tech_docs,library_docs"
     ),
     full: bool = False,
     workers: int = 28,
@@ -642,7 +643,8 @@ def build_corpus_entrypoint(
         "fineweb_edu,arxiv,wikipedia,"
         "flan_v2,natural_instructions,openhermes,nl2bash,"
         "numinamath,competition_math,proof_pile,"
-        "papers_with_code,pypi_readmes,fastai_notebooks,python_ds_handbook,sicp"
+        "papers_with_code,pypi_readmes,fastai_notebooks,python_ds_handbook,sicp,"
+        "deepmind_math,tech_docs,library_docs"
     ),
     full: bool = False,
     workers: int = 28,
