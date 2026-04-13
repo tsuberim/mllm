@@ -84,6 +84,12 @@ EXPERIMENT_CAPS = {
     "fastai_notebooks":        None,
     "python_ds_handbook":      None,
     "sicp":                    None,
+    # Math — DeepMind
+    "deepmind_math":         100_000,
+    # Reference — tech docs (Git book + Docker docs + Bash manual)
+    "tech_docs":               None,
+    # Reference — library docs (NumPy, Pandas, sklearn, matplotlib, requests)
+    "library_docs":            None,
 }
 
 # ── Stack v2 ──────────────────────────────────────────────────────────────────
@@ -1150,12 +1156,217 @@ def _nl2bash_pipeline(out_dir: Path, logs: Path):
     print(f"nl2bash: wrote {n} pairs to {out_file}")
 
 
+# ── DeepMind Mathematics ──────────────────────────────────────────────────────
+
+def _deepmind_math_pipeline(out_dir: Path, logs: Path, limit=None):
+    out_path  = out_dir / "deepmind_math"
+    out_path.mkdir(parents=True, exist_ok=True)
+    done_flag = out_path / "_done"
+    if done_flag.exists():
+        print("deepmind_math: already done, skipping")
+        return
+
+    try:
+        from datasets import get_dataset_config_names, load_dataset
+        configs = get_dataset_config_names("deepmind/math_dataset", trust_remote_code=True)
+        print(f"deepmind_math: {len(configs)} configs")
+    except Exception as e:
+        print(f"deepmind_math: failed to get configs: {e} — skipping")
+        done_flag.touch()
+        return
+
+    cap = limit if limit is not None else EXPERIMENT_CAPS.get("deepmind_math")
+    out_file = out_path / "deepmind_math.jsonl.gz"
+    n = 0
+    with gzip.open(out_file, "wt") as f:
+        for config in configs:
+            if cap and n >= cap:
+                break
+            try:
+                ds = load_dataset("deepmind/math_dataset", config,
+                                  split="train", trust_remote_code=True, streaming=True)
+                for ex in ds:
+                    if cap and n >= cap:
+                        break
+                    q = (ex.get("question") or "").strip()
+                    a = (ex.get("answer") or "").strip()
+                    if q and a:
+                        text = f"Problem: {q}\n\nSolution: {a}"
+                        f.write(json.dumps({"text": text[:MAX_FILE_BYTES],
+                                            "id":   f"{config}_{n}"}) + "\n")
+                        n += 1
+            except Exception as e:
+                print(f"deepmind_math: config {config} failed: {e}")
+    done_flag.touch()
+    print(f"deepmind_math: wrote {n} problems to {out_file}")
+
+
+# ── Tech docs (Pro Git + Docker docs + Bash manual) ───────────────────────────
+
+def _tech_docs_pipeline(out_dir: Path, logs: Path):
+    out_path  = out_dir / "tech_docs"
+    out_path.mkdir(parents=True, exist_ok=True)
+    done_flag = out_path / "_done"
+    if done_flag.exists():
+        print("tech_docs: already done, skipping")
+        return
+
+    out_file = out_path / "tech_docs.jsonl.gz"
+    n = 0
+    with gzip.open(out_file, "wt") as f:
+
+        # 1. Pro Git book (AsciiDoc)
+        n_git = 0
+        try:
+            url = "https://github.com/progit/progit2/archive/refs/heads/master.zip"
+            print(f"tech_docs: downloading Pro Git book ...")
+            with urllib.request.urlopen(url, timeout=120) as resp:
+                content = resp.read()
+            with zipfile.ZipFile(io.BytesIO(content)) as zf:
+                for name in sorted(zf.namelist()):
+                    if not name.endswith(".adoc"):
+                        continue
+                    if any(x in name for x in ["/images/", "/_"]):
+                        continue
+                    text = zf.read(name).decode("utf-8", errors="replace").strip()
+                    if len(text) < 200:
+                        continue
+                    f.write(json.dumps({"text": text[:MAX_FILE_BYTES],
+                                        "id":   f"progit/{name}"}) + "\n")
+                    n_git += 1
+            print(f"tech_docs: Pro Git: {n_git} docs")
+        except Exception as e:
+            print(f"tech_docs: Pro Git failed: {e}")
+        n += n_git
+
+        # 2. GNU Bash manual (plain text)
+        n_bash = 0
+        try:
+            url = "https://www.gnu.org/software/bash/manual/bash.txt"
+            print(f"tech_docs: downloading Bash manual ...")
+            text = None
+            for ctx in (None, _SSL_UNVERIFIED):
+                try:
+                    with urllib.request.urlopen(url, context=ctx, timeout=60) as resp:
+                        text = resp.read().decode("utf-8", errors="replace").strip()
+                    break
+                except Exception:
+                    pass
+            if text:
+                sections = [s.strip() for s in text.split("\x0c") if len(s.strip()) > 200]
+                if not sections:
+                    sections = [text]
+                for i, sec in enumerate(sections):
+                    f.write(json.dumps({"text": sec[:MAX_FILE_BYTES],
+                                        "id":   f"bash_manual_{i}"}) + "\n")
+                    n_bash += 1
+            print(f"tech_docs: Bash manual: {n_bash} sections")
+        except Exception as e:
+            print(f"tech_docs: Bash manual failed: {e}")
+        n += n_bash
+
+        # 3. Docker docs (Markdown) — cap download at 150 MB to avoid huge binary assets
+        n_docker = 0
+        try:
+            url = "https://github.com/docker/docs/archive/refs/heads/main.zip"
+            print(f"tech_docs: downloading Docker docs (up to 150 MB) ...")
+            chunks, total = [], 0
+            with urllib.request.urlopen(url, timeout=300) as resp:
+                while total < 150 * 1024 * 1024:
+                    chunk = resp.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    chunks.append(chunk)
+                    total += len(chunk)
+            content = b"".join(chunks)
+            with zipfile.ZipFile(io.BytesIO(content)) as zf:
+                for name in sorted(zf.namelist()):
+                    if not name.endswith(".md"):
+                        continue
+                    if any(x in name for x in ["/node_modules/", "/vendor/", "/_"]):
+                        continue
+                    raw = zf.read(name)
+                    if len(raw) < 200:
+                        continue
+                    text = raw.decode("utf-8", errors="replace").strip()
+                    f.write(json.dumps({"text": text[:MAX_FILE_BYTES],
+                                        "id":   f"docker/{name}"}) + "\n")
+                    n_docker += 1
+            print(f"tech_docs: Docker docs: {n_docker} files")
+        except Exception as e:
+            print(f"tech_docs: Docker docs failed: {e}")
+        n += n_docker
+
+    done_flag.touch()
+    print(f"tech_docs: wrote {n} docs total to {out_file}")
+
+
+# ── Library docs (NumPy, Pandas, scikit-learn, Matplotlib, Requests) ──────────
+
+_LIBRARY_REPOS = [
+    # (name, org/repo, doc_subdir_prefix)
+    ("numpy",       "numpy/numpy",                  "doc/source"),
+    ("pandas",      "pandas-dev/pandas",             "doc/source"),
+    ("sklearn",     "scikit-learn/scikit-learn",     "doc"),
+    ("matplotlib",  "matplotlib/matplotlib",         "doc"),
+    ("requests",    "psf/requests",                  "docs"),
+]
+
+def _library_docs_pipeline(out_dir: Path, logs: Path):
+    out_path  = out_dir / "library_docs"
+    out_path.mkdir(parents=True, exist_ok=True)
+    done_flag = out_path / "_done"
+    if done_flag.exists():
+        print("library_docs: already done, skipping")
+        return
+
+    out_file = out_path / "library_docs.jsonl.gz"
+    n = 0
+    with gzip.open(out_file, "wt") as f:
+        for lib_name, repo, doc_prefix in _LIBRARY_REPOS:
+            lib_n = 0
+            for branch in ("main", "master"):
+                url = f"https://github.com/{repo}/archive/refs/heads/{branch}.zip"
+                try:
+                    print(f"library_docs: downloading {lib_name} ({branch}) ...")
+                    chunks, total = [], 0
+                    with urllib.request.urlopen(url, timeout=180) as resp:
+                        while total < 80 * 1024 * 1024:  # cap at 80 MB per lib
+                            chunk = resp.read(512 * 1024)
+                            if not chunk:
+                                break
+                            chunks.append(chunk)
+                            total += len(chunk)
+                    content = b"".join(chunks)
+                    with zipfile.ZipFile(io.BytesIO(content)) as zf:
+                        for fname in sorted(zf.namelist()):
+                            if not (fname.endswith(".rst") or fname.endswith(".md")):
+                                continue
+                            # Confirm it lives under the docs subdirectory
+                            parts = fname.split("/", 2)
+                            if len(parts) < 3 or not parts[2].startswith(doc_prefix):
+                                continue
+                            raw = zf.read(fname)
+                            if len(raw) < 100:
+                                continue
+                            text = raw.decode("utf-8", errors="replace").strip()
+                            f.write(json.dumps({"text": text[:MAX_FILE_BYTES],
+                                                "id":   f"{lib_name}/{fname}"}) + "\n")
+                            lib_n += 1
+                    break  # success — don't try other branch
+                except Exception as e:
+                    print(f"library_docs: {lib_name} ({branch}) failed: {e}")
+            print(f"library_docs: {lib_name}: {lib_n} docs")
+            n += lib_n
+
+    done_flag.touch()
+    print(f"library_docs: wrote {n} docs total to {out_file}")
+
+
 # ── CLI ───────────────────────────────────────────────────────────────────────
 
-# Not implemented (no public dataset / requires live scraping):
-#   - Dev.to + HashNode (2B): FineWeb-Edu sample-10BT covers much of this
-#   - Git book + Docker docs + Bash manual (0.5B): scraping required
-#   - Library docs NumPy/Pandas/etc (0.1B): ReadTheDocs scraping required
+# Not yet implemented (no clean public dataset):
+#   - Dev.to + HashNode (2B): no HF dataset; FineWeb-Edu likely covers most of it
 #   - Math Jupyter notebooks (0.5B): covered by `jupyter` source
 #   - Synthetic data (15B): milestone 3b — not yet generated
 
@@ -1168,11 +1379,13 @@ ALL_SOURCES = list(STACK_V2_LANGS.keys()) + [
     "flan_v2", "natural_instructions", "openhermes", "nl2bash",
     "numinamath", "competition_math", "proof_pile",
     "papers_with_code", "pypi_readmes", "fastai_notebooks", "python_ds_handbook", "sicp",
+    "deepmind_math", "tech_docs", "library_docs",
 ]
 
 _DIRECT_SOURCES = {
     "wikibooks", "nl2bash", "tldr_pages", "man_pages", "python_docs", "peps", "rfcs",
     "papers_with_code", "pypi_readmes", "fastai_notebooks", "python_ds_handbook", "sicp",
+    "deepmind_math", "tech_docs", "library_docs",
 }
 
 def main():
@@ -1234,6 +1447,15 @@ def main():
             continue
         if source == "sicp":
             _sicp_pipeline(out_dir, logs_dir)
+            continue
+        if source == "deepmind_math":
+            _deepmind_math_pipeline(out_dir, logs_dir, limit=args.limit or EXPERIMENT_CAPS.get("deepmind_math"))
+            continue
+        if source == "tech_docs":
+            _tech_docs_pipeline(out_dir, logs_dir)
+            continue
+        if source == "library_docs":
+            _library_docs_pipeline(out_dir, logs_dir)
             continue
 
         kw = dict(out_dir=out_dir, full=args.full, workers=args.workers,
