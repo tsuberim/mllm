@@ -617,8 +617,10 @@ def _fineweb_edu_pipeline(out_dir: Path, full: bool, workers: int, logs: Path, l
 # ── ArXiv CS ──────────────────────────────────────────────────────────────────
 
 def _arxiv_adapter(self, data: dict, path: str, id_in_file: int) -> dict:
-    # RedPajama schema: text (str), meta (JSON string with pile_set_name)
-    text = (data.get("text") or "").strip()
+    # ccdv/arxiv-summarization schema: article (body), abstract
+    article  = (data.get("article") or "").strip()
+    abstract = (data.get("abstract") or "").strip()
+    text = f"{abstract}\n\n{article}".strip() if abstract else article
     if not text:
         return _SKIP
     return {
@@ -630,12 +632,13 @@ def _arxiv_adapter(self, data: dict, path: str, id_in_file: int) -> dict:
 def _arxiv_pipeline(out_dir: Path, full: bool, workers: int, logs: Path, limit_override=None):
     cap   = limit_override if limit_override is not None else (None if full else EXPERIMENT_CAPS["arxiv"])
     limit = cap if cap is not None else -1
-    # RedPajama-Data-1T-Sample: clean Parquet, no loading script, contains ArXiv + other
-    # scientific/technical text. scientific_papers and peS2o both use deprecated scripts.
+    # ccdv/arxiv-summarization: clean Parquet, full-text arxiv papers
+    # scientific_papers, peS2o, and RedPajama-Data-1T-Sample all use deprecated scripts
+    # or don't exist on HF.
     pipeline = [
         HuggingFaceDatasetReader(
-            dataset="togethercomputer/RedPajama-Data-1T-Sample",
-            dataset_options={"split": "train"},
+            dataset="ccdv/arxiv-summarization",
+            dataset_options={"name": "long", "split": "train"},
             adapter=_arxiv_adapter,
             streaming=True,
             limit=limit,
@@ -817,15 +820,15 @@ def _numinamath_pipeline(out_dir: Path, full: bool, workers: int, logs: Path, li
 # ── Competition / DeepMind Math ───────────────────────────────────────────────
 
 def _competition_math_adapter(self, data: dict, path: str, id_in_file: int) -> dict:
-    problem  = (data.get("problem") or "").strip()
-    solution = (data.get("solution") or "").strip()
-    if not problem or not solution:
+    # meta-math/MetaMathQA schema: query, response, type
+    query    = (data.get("query") or data.get("problem") or "").strip()
+    response = (data.get("response") or data.get("solution") or "").strip()
+    if not query or not response:
         return _SKIP
-    level   = data.get("level") or ""
-    subject = data.get("type") or ""
-    header  = f"[{subject} | {level}]\n" if subject or level else ""
+    math_type = data.get("type") or data.get("level") or ""
+    header    = f"[{math_type}]\n" if math_type else ""
     return {
-        "text": f"{header}Problem: {problem}\n\nSolution: {solution}",
+        "text": f"{header}Problem: {query}\n\nSolution: {response}",
         "id":   str(id_in_file),
         "metadata": {},
     }
@@ -833,10 +836,12 @@ def _competition_math_adapter(self, data: dict, path: str, id_in_file: int) -> d
 def _competition_math_pipeline(out_dir: Path, full: bool, workers: int, logs: Path, limit_override=None):
     cap   = limit_override if limit_override is not None else (None if full else EXPERIMENT_CAPS["competition_math"])
     limit = cap if cap is not None else -1
+    # meta-math/MetaMathQA: clean Parquet, 395K augmented math problems
+    # lighteval/MATH doesn't exist on Hub
     pipeline = [
         HuggingFaceDatasetReader(
-            dataset="lighteval/MATH",
-            dataset_options={"name": "all", "split": "train"},
+            dataset="meta-math/MetaMathQA",
+            dataset_options={"split": "train"},
             adapter=_competition_math_adapter,
             streaming=True,
             limit=limit,
@@ -861,10 +866,12 @@ def _proof_pile_adapter(self, data: dict, path: str, id_in_file: int) -> dict:
 def _proof_pile_pipeline(out_dir: Path, full: bool, workers: int, logs: Path, limit_override=None):
     cap   = limit_override if limit_override is not None else (None if full else EXPERIMENT_CAPS["proof_pile"])
     limit = cap if cap is not None else -1
+    # open-web-math/open-web-math: ~15B tokens of math web content, clean Parquet
+    # EleutherAI/proof-pile-2 uses a deprecated loading script
     pipeline = [
         HuggingFaceDatasetReader(
-            dataset="EleutherAI/proof-pile-2",
-            dataset_options={"name": "arxiv", "split": "train"},
+            dataset="open-web-math/open-web-math",
+            dataset_options={"split": "train"},
             adapter=_proof_pile_adapter,
             streaming=True,
             limit=limit,

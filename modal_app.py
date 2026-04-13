@@ -219,12 +219,13 @@ def filter_source(commit: str, source: str, full: bool = False, workers: int = 2
     for line in proc.stdout:
         print(line.decode("utf-8", errors="replace"), end="", flush=True)
     proc.wait()
-    if proc.returncode != 0:
-        raise RuntimeError(f"pipeline.py exited {proc.returncode} for source={source}")
-    vol.commit()
     elapsed = time.time() - t0
+    if proc.returncode != 0:
+        print(f"[filter_source:{source}] FAILED  ({elapsed:.0f}s)")
+        return {"source": source, "ok": False}
+    vol.commit()
     print(f"[filter_source:{source}] done  ({elapsed:.0f}s)")
-    return {"source": source, "elapsed": elapsed}
+    return {"source": source, "ok": True, "elapsed": elapsed}
 
 
 @app.function(
@@ -349,12 +350,17 @@ def build_corpus(
     t0 = time.time()
     results = list(filter_source.starmap([(commit, src, full, workers) for src in source_list]))
     t1 = time.time()
-    print(f"[build_corpus] step 1 done: {[r['source'] for r in results]}  ({t1-t0:.0f}s)")
+    ok_sources   = [r["source"] for r in results if r.get("ok")]
+    fail_sources = [r["source"] for r in results if not r.get("ok")]
+    print(f"[build_corpus] step 1 done  ({t1-t0:.0f}s)")
+    print(f"  ok:   {ok_sources}")
+    if fail_sources:
+        print(f"  FAIL: {fail_sources}")
 
     # ── step 2a: parallel tokenize phase 1 ────────────────────────────────────
     print("\n[build_corpus] step 2a: tokenize phase 1 (parallel per source)")
     t0 = time.time()
-    p1_results = list(tokenize_phase1.starmap([(commit, src, workers) for src in source_list]))
+    p1_results = list(tokenize_phase1.starmap([(commit, src, workers) for src in ok_sources]))
     t1 = time.time()
     print(f"[build_corpus] step 2a done: {[r['source'] for r in p1_results]}  ({t1-t0:.0f}s)")
 
