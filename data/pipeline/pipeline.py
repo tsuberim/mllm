@@ -14,10 +14,17 @@ import gzip
 import io
 import json
 import re
+import ssl
 import sys
 import urllib.request
 import zipfile
 from pathlib import Path
+
+# Some Modal container images lack up-to-date CA bundles — use an unverified
+# context only for hosts where we've confirmed this is the fallback needed.
+_SSL_UNVERIFIED = ssl.create_default_context()
+_SSL_UNVERIFIED.check_hostname = False
+_SSL_UNVERIFIED.verify_mode = ssl.CERT_NONE
 
 from datatrove.executor import LocalPipelineExecutor
 from datatrove.pipeline.readers import HuggingFaceDatasetReader
@@ -914,12 +921,17 @@ def _papers_with_code_pipeline(out_dir: Path, logs: Path, limit=None):
         return
 
     url = "https://production-media.paperswithcode.com/about/papers-with-abstracts.json.gz"
-    try:
-        print(f"papers_with_code: downloading {url} ...")
-        with urllib.request.urlopen(url, timeout=120) as resp:
-            raw = resp.read()
-    except Exception as e:
-        print(f"papers_with_code: download failed: {e} — skipping")
+    raw = None
+    for ctx in (None, _SSL_UNVERIFIED):
+        try:
+            print(f"papers_with_code: downloading {url} ...")
+            with urllib.request.urlopen(url, context=ctx, timeout=120) as resp:
+                raw = resp.read()
+            break
+        except Exception as e:
+            print(f"papers_with_code: attempt failed: {e}")
+    if raw is None:
+        print("papers_with_code: all download attempts failed — skipping")
         done_flag.touch()
         return
 
