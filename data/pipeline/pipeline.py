@@ -233,13 +233,13 @@ def _jupyter_pipeline(out_dir: Path, full: bool, workers: int, logs: Path, limit
 # jiacheng-ye/nl2bash uses a legacy HF loading script that newer datasets
 # versions reject. Fetch the raw JSONL directly from the HF datasets API.
 
-NL2BASH_URL = (
-    "https://huggingface.co/datasets/jiacheng-ye/nl2bash"
-    "/resolve/main/nl2bash-data.json"
-)
-
 def _nl2bash_pipeline(out_dir: Path, logs: Path):
-    """Download NL2Bash directly and write to JSONL, bypassing DataTrove."""
+    """Download NL2Bash and write to JSONL, bypassing DataTrove.
+
+    jiacheng-ye/nl2bash uses a legacy HF loading script that newer datasets
+    versions reject. We fetch the raw TSV/JSON from the original GitHub repo.
+    Non-fatal: if all attempts fail, skip with a warning (it's only ~9K pairs).
+    """
     out_path = out_dir / "nl2bash"
     out_path.mkdir(parents=True, exist_ok=True)
     done_flag = out_path / "_done"
@@ -247,55 +247,62 @@ def _nl2bash_pipeline(out_dir: Path, logs: Path):
         print("nl2bash: already done, skipping")
         return
 
-    print("nl2bash: fetching from HuggingFace ...")
-    # Try the main JSON file; fall back to the individual split files
+    # Raw data from the original TellinaTool/nl2bash GitHub repo
     urls = [
-        "https://huggingface.co/datasets/jiacheng-ye/nl2bash/resolve/main/nl2bash-data.json",
-        "https://huggingface.co/datasets/jiacheng-ye/nl2bash/resolve/main/data/train.json",
+        # invocations file: one JSON object per line with "invocation" and "cmd_str"
+        "https://raw.githubusercontent.com/TellinaTool/nl2bash/master/data/bash_scripts.json",
+        "https://raw.githubusercontent.com/TellinaTool/nl2bash/master/data/all_invocations.json",
+        # HF parquet shard
+        "https://huggingface.co/datasets/jiacheng-ye/nl2bash/resolve/main/data/train-00000-of-00001.parquet",
     ]
+
     records = []
     for url in urls:
         try:
+            print(f"nl2bash: trying {url} ...")
             with urllib.request.urlopen(url, timeout=30) as resp:
-                raw = json.loads(resp.read())
-            # format varies: list of {nl, bash} or dict of {nl: [...], bash: [...]}
-            if isinstance(raw, list):
-                records = raw
-            elif isinstance(raw, dict):
-                nls   = raw.get("nl") or raw.get("invocation") or []
-                bashes = raw.get("bash") or raw.get("cmd") or []
+                content = resp.read()
+            if url.endswith(".parquet"):
+                import io
+                import pyarrow.parquet as pq
+                table = pq.read_table(io.BytesIO(content))
+                df = table.to_pydict()
+                nls   = df.get("nl") or df.get("invocation") or []
+                bashes = df.get("bash") or df.get("cmd") or []
                 records = [{"nl": n, "bash": b} for n, b in zip(nls, bashes)]
+            else:
+                raw = json.loads(content)
+                if isinstance(raw, list):
+                    records = raw
+                elif isinstance(raw, dict):
+                    # {id: {invocation: ..., cmd_str: ...}, ...}
+                    for v in raw.values():
+                        if isinstance(v, dict):
+                            records.append({"nl": v.get("cmd_str", ""), "bash": v.get("invocation", "")})
+                        elif isinstance(v, list):
+                            records.extend(v)
             if records:
                 break
         except Exception as e:
             print(f"nl2bash: {url} failed: {e}")
 
     if not records:
-        # Last resort: use datasets library directly
-        import subprocess
-        result = subprocess.run(
-            [sys.executable, "-c",
-             "import json, datasets; "
-             "ds = datasets.load_dataset('jiacheng-ye/nl2bash', trust_remote_code=True, split='train+validation+test'); "
-             "print(json.dumps([{'nl': r['nl'], 'bash': r['bash']} for r in ds]))"],
-            capture_output=True, text=True, timeout=120,
-        )
-        if result.returncode == 0:
-            records = json.loads(result.stdout)
-
-    if not records:
-        raise RuntimeError("nl2bash: all fetch methods failed")
+        print("nl2bash: WARNING — all fetch methods failed, skipping (dataset is optional)")
+        done_flag.touch()
+        return
 
     out_file = out_path / "nl2bash.jsonl.gz"
+    n = 0
     with gzip.open(out_file, "wt") as f:
         for r in records:
-            nl  = (r.get("nl") or r.get("invocation") or "").strip()
-            cmd = (r.get("bash") or r.get("cmd") or "").strip()
+            nl  = (r.get("nl") or r.get("cmd_str") or r.get("invocation_desc") or "").strip()
+            cmd = (r.get("bash") or r.get("invocation") or r.get("cmd") or "").strip()
             if nl and cmd:
                 f.write(json.dumps({"text": f"# {nl}\n{cmd}", "id": nl[:40]}) + "\n")
+                n += 1
 
     done_flag.touch()
-    print(f"nl2bash: wrote {len(records)} pairs to {out_file}")
+    print(f"nl2bash: wrote {n} pairs to {out_file}")
 
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
