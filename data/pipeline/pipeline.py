@@ -89,8 +89,9 @@ EXPERIMENT_CAPS = {
     "fastai_notebooks":        None,   # ~0.3M — always full
     "python_ds_handbook":      None,   # ~0.4M — always full
     "sicp":                    None,   # ~1M   — always full
-    # Math — DeepMind  [tokens/doc unknown — always full until measured]
-    "deepmind_math":           None,
+    # Math — DeepMind  [real: ~10 tok/doc; 226M total docs, 2.26B tokens full scale]
+    # Budget: 1.5B × (8/88) = 136M tokens → 136M/10 = 13.6M docs
+    "deepmind_math":     14_000_000,
     # Reference — tech docs + library docs (small, always full)
     "tech_docs":               None,   # ~2M   — always full
     "library_docs":            None,   # broken — fix separately
@@ -1163,6 +1164,8 @@ def _nl2bash_pipeline(out_dir: Path, logs: Path):
 # ── DeepMind Mathematics ──────────────────────────────────────────────────────
 
 def _deepmind_math_pipeline(out_dir: Path, logs: Path, limit=None):
+    # deepmind/math_dataset uses deprecated script loader — use parquet mirror instead.
+    # m-gopichand/deepmind_math_dataset_processed: 226M docs, ~10 tok/doc, ~2.26B tokens.
     out_path  = out_dir / "deepmind_math"
     out_path.mkdir(parents=True, exist_ok=True)
     done_flag = out_path / "_done"
@@ -1170,37 +1173,27 @@ def _deepmind_math_pipeline(out_dir: Path, logs: Path, limit=None):
         print("deepmind_math: already done, skipping")
         return
 
-    try:
-        from datasets import get_dataset_config_names, load_dataset
-        configs = get_dataset_config_names("deepmind/math_dataset", trust_remote_code=True)
-        print(f"deepmind_math: {len(configs)} configs")
-    except Exception as e:
-        print(f"deepmind_math: failed to get configs: {e} — skipping")
-        done_flag.touch()
-        return
-
+    from datasets import load_dataset
     cap = limit if limit is not None else EXPERIMENT_CAPS.get("deepmind_math")
+    print(f"deepmind_math: loading from m-gopichand/deepmind_math_dataset_processed (cap={cap})")
     out_file = out_path / "deepmind_math.jsonl.gz"
     n = 0
     with gzip.open(out_file, "wt") as f:
-        for config in configs:
-            if cap and n >= cap:
-                break
-            try:
-                ds = load_dataset("deepmind/math_dataset", config,
-                                  split="train", trust_remote_code=True, streaming=True)
-                for ex in ds:
-                    if cap and n >= cap:
-                        break
-                    q = (ex.get("question") or "").strip()
-                    a = (ex.get("answer") or "").strip()
-                    if q and a:
-                        text = f"Problem: {q}\n\nSolution: {a}"
-                        f.write(json.dumps({"text": text[:MAX_FILE_BYTES],
-                                            "id":   f"{config}_{n}"}) + "\n")
-                        n += 1
-            except Exception as e:
-                print(f"deepmind_math: config {config} failed: {e}")
+        try:
+            ds = load_dataset("m-gopichand/deepmind_math_dataset_processed",
+                              split="train", streaming=True)
+            for ex in ds:
+                if cap and n >= cap:
+                    break
+                q = (ex.get("question") or "").strip()
+                a = (ex.get("answer") or "").strip()
+                if q and a:
+                    text = f"Problem: {q}\n\nSolution: {a}"
+                    f.write(json.dumps({"text": text,
+                                        "id":   f"deepmind_{n}"}) + "\n")
+                    n += 1
+        except Exception as e:
+            print(f"deepmind_math: failed: {e}")
     done_flag.touch()
     print(f"deepmind_math: wrote {n} problems to {out_file}")
 
@@ -1346,9 +1339,9 @@ def _library_docs_pipeline(out_dir: Path, logs: Path):
                         for fname in sorted(zf.namelist()):
                             if not (fname.endswith(".rst") or fname.endswith(".md")):
                                 continue
-                            # Confirm it lives under the docs subdirectory
-                            parts = fname.split("/", 2)
-                            if len(parts) < 3 or not parts[2].startswith(doc_prefix):
+                            # fname = "{repo-root-with-hash}/{doc_prefix}/..."; split at 1
+                            parts = fname.split("/", 1)
+                            if len(parts) < 2 or not parts[1].startswith(doc_prefix):
                                 continue
                             raw = zf.read(fname)
                             if len(raw) < 100:
