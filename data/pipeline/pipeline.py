@@ -9,6 +9,7 @@ Usage:
 """
 
 import argparse
+import bz2
 import gzip
 import io
 import json
@@ -24,9 +25,12 @@ from datatrove.pipeline.writers import JsonlWriter
 
 MAX_FILE_BYTES = 1_000_000
 
-# ── experiment caps (document count) ─────────────────────────────────────────
-# Full-scale token budgets from docs/dataset.md; experiment caps are ~1% of full.
+# DataTrove compat: adapters must NOT return None — some versions crash on
+# parsed_data.get() when adapter returns None.  Return {"text": ""} to skip;
+# DataTrove filters out empty-text documents internally.
+_SKIP = {"text": ""}
 
+# ── experiment caps (document count) ─────────────────────────────────────────
 EXPERIMENT_CAPS = {
     # Code — Stack v2
     "stack_v2_python":      500_000,
@@ -40,16 +44,15 @@ EXPERIMENT_CAPS = {
     "stack_v2_md":          150_000,
     # Code — other
     "jupyter":               50_000,
-    "rosetta_code":            None,   # tiny ~1K docs — always full
+    "rosetta_code":            None,   # tiny ~1K — always full
     # Q&A
     "stackoverflow":        200_000,
     "stack_exchange_other": 100_000,
     # Commits / issues
     "github_commits":       150_000,
     "github_issues":        100_000,
-    # Reference — HF
+    # Reference — direct download (all small, always full unless overridden)
     "wikibooks":             30_000,
-    # Reference — direct download (small, always full)
     "tldr_pages":              None,
     "man_pages":               None,
     "python_docs":             None,
@@ -63,12 +66,12 @@ EXPERIMENT_CAPS = {
     "flan_v2":              100_000,
     "natural_instructions":  50_000,
     "openhermes":            50_000,
-    "nl2bash":                 None,   # ~9.3K pairs — always full
+    "nl2bash":                 None,
     # Math
     "numinamath":            50_000,
     "competition_math":      30_000,
     "proof_pile":            50_000,
-    # Pedagogical — direct download
+    # Pedagogical
     "papers_with_code":      50_000,
     "pypi_readmes":          50_000,
     "fastai_notebooks":        None,
@@ -77,7 +80,6 @@ EXPERIMENT_CAPS = {
 }
 
 # ── Stack v2 ──────────────────────────────────────────────────────────────────
-# bigcode/the-stack-v2-dedup: license-filtered, near-deduped by BigCode.
 
 STACK_V2_LANGS = {
     "stack_v2_python":     "Python",
@@ -91,10 +93,10 @@ STACK_V2_LANGS = {
     "stack_v2_md":         "Markdown",
 }
 
-def _stack_v2_adapter(self, data: dict, path: str, id_in_file: int) -> dict | None:
+def _stack_v2_adapter(self, data: dict, path: str, id_in_file: int) -> dict:
     content = data.get("content") or ""
     if not content:
-        return None
+        return _SKIP
     return {
         "text": content[:MAX_FILE_BYTES],
         "id":   data.get("hexsha") or f"{path}/{id_in_file}",
@@ -119,12 +121,11 @@ def _stack_v2_pipeline(source: str, out_dir: Path, full: bool, workers: int, log
 
 
 # ── Jupyter notebooks ─────────────────────────────────────────────────────────
-# bigcode/starcoderdata: includes a deduplicated Jupyter scripts subset.
 
-def _jupyter_adapter(self, data: dict, path: str, id_in_file: int) -> dict | None:
+def _jupyter_adapter(self, data: dict, path: str, id_in_file: int) -> dict:
     content = data.get("content") or ""
     if not content:
-        return None
+        return _SKIP
     return {
         "text": content[:MAX_FILE_BYTES],
         "id":   str(id_in_file),
@@ -134,8 +135,6 @@ def _jupyter_adapter(self, data: dict, path: str, id_in_file: int) -> dict | Non
 def _jupyter_pipeline(out_dir: Path, full: bool, workers: int, logs: Path, limit_override=None):
     cap   = limit_override if limit_override is not None else (None if full else EXPERIMENT_CAPS["jupyter"])
     limit = cap if cap is not None else -1
-    # bigcode/starcoderdata has a single 'default' config containing all languages.
-    # codeparrot/github-jupyter-parsed is a dedicated Jupyter dataset with a 'content' field.
     pipeline = [
         HuggingFaceDatasetReader(
             dataset="codeparrot/github-jupyter-parsed",
@@ -151,12 +150,12 @@ def _jupyter_pipeline(out_dir: Path, full: bool, workers: int, logs: Path, limit
 
 # ── Rosetta Code ──────────────────────────────────────────────────────────────
 
-def _rosetta_adapter(self, data: dict, path: str, id_in_file: int) -> dict | None:
+def _rosetta_adapter(self, data: dict, path: str, id_in_file: int) -> dict:
     task = (data.get("task") or "").strip()
     lang = (data.get("language") or "").strip()
     code = (data.get("code") or "").strip()
     if not code:
-        return None
+        return _SKIP
     header = f"# {task}" if task else ""
     fence  = f"```{lang.lower()}\n{code}\n```" if lang else code
     return {
@@ -181,7 +180,7 @@ def _rosetta_code_pipeline(out_dir: Path, full: bool, workers: int, logs: Path, 
     return LocalPipelineExecutor(pipeline=pipeline, tasks=workers, logging_dir=str(logs / "rosetta_code"))
 
 
-# ── stack overflow ────────────────────────────────────────────────────────────
+# ── Stack Overflow ────────────────────────────────────────────────────────────
 
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 _HTML_ENT_RE = re.compile(r"&(amp|lt|gt|quot|apos|nbsp|#\d+|#x[0-9a-fA-F]+);")
@@ -197,14 +196,14 @@ def _strip_html(text: str) -> str:
         return " "
     return _HTML_ENT_RE.sub(_ent, text).strip()
 
-def _so_adapter(self, data: dict, path: str, id_in_file: int) -> dict | None:
+def _so_adapter(self, data: dict, path: str, id_in_file: int) -> dict:
     answers = data.get("answers") or []
     if not answers:
-        return None
+        return _SKIP
     best = max(answers, key=lambda a: (a.get("selected", False), a.get("pm_score", 0)))
     answer = _strip_html(best.get("text", "")).strip()
     if not answer:
-        return None
+        return _SKIP
     question = _strip_html(data.get("question") or "")
     return {
         "text": f"Q: {question}\n\nA: {answer}",
@@ -228,15 +227,13 @@ def _stackoverflow_pipeline(out_dir: Path, full: bool, workers: int, logs: Path,
     return LocalPipelineExecutor(pipeline=pipeline, tasks=workers, logging_dir=str(logs / "stackoverflow"))
 
 
-# ── Stack Exchange (other sites) ───────────────────────────────────────────────
-# ArmelR/stack-exchange-instruction: Code Review, Unix, ServerFault, AskUbuntu,
-# SoftwareEngineering, DevOps, DataScience, etc.
+# ── Stack Exchange (other sites) ──────────────────────────────────────────────
 
-def _se_other_adapter(self, data: dict, path: str, id_in_file: int) -> dict | None:
+def _se_other_adapter(self, data: dict, path: str, id_in_file: int) -> dict:
     instruction = (data.get("instruction") or data.get("question") or "").strip()
     response    = (data.get("response") or data.get("answer") or "").strip()
     if not response:
-        return None
+        return _SKIP
     text = f"Q: {instruction}\n\nA: {response}" if instruction else response
     return {
         "text": text[:MAX_FILE_BYTES],
@@ -260,13 +257,13 @@ def _stack_exchange_other_pipeline(out_dir: Path, full: bool, workers: int, logs
     return LocalPipelineExecutor(pipeline=pipeline, tasks=workers, logging_dir=str(logs / "stack_exchange_other"))
 
 
-# ── github commits ────────────────────────────────────────────────────────────
+# ── GitHub commits ────────────────────────────────────────────────────────────
 
-def _commits_adapter(self, data: dict, path: str, id_in_file: int) -> dict | None:
+def _commits_adapter(self, data: dict, path: str, id_in_file: int) -> dict:
     subject = (data.get("subject") or "").strip()
     content = (data.get("new_contents") or "").strip()
     if not content:
-        return None
+        return _SKIP
     text = f"# {subject}\n\n{content}" if subject else content
     return {
         "text": text[:MAX_FILE_BYTES],
@@ -298,16 +295,16 @@ def _github_commits_pipeline(out_dir: Path, full: bool, workers: int, logs: Path
     return LocalPipelineExecutor(pipeline=pipeline, tasks=workers, logging_dir=str(logs / "github_commits"))
 
 
-# ── github issues ─────────────────────────────────────────────────────────────
+# ── GitHub issues ─────────────────────────────────────────────────────────────
 
 _ISSUE_TOKENS = re.compile(r"<issue_start>|<issue_comment>|<issue_closed>|<issue_opened>")
 
-def _issues_adapter(self, data: dict, path: str, id_in_file: int) -> dict | None:
+def _issues_adapter(self, data: dict, path: str, id_in_file: int) -> dict:
     if data.get("pull_request"):
-        return None
+        return _SKIP
     content = (data.get("content") or "").strip()
     if not content:
-        return None
+        return _SKIP
     return {
         "text": _ISSUE_TOKENS.sub("\n---\n", content).strip()[:MAX_FILE_BYTES],
         "id":   str(id_in_file),
@@ -331,34 +328,57 @@ def _github_issues_pipeline(out_dir: Path, full: bool, workers: int, logs: Path,
 
 
 # ── Wikibooks ─────────────────────────────────────────────────────────────────
-# wikimedia/wikibooks: English Wikibooks (2023-11-01 snapshot).
+# Direct download from Wikimedia XML dumps (wikimedia/wikibooks does not exist on HF).
 
-def _wikibooks_adapter(self, data: dict, path: str, id_in_file: int) -> dict | None:
-    text  = (data.get("text") or "").strip()
-    if not text:
-        return None
-    title = (data.get("title") or "").strip()
-    body  = f"# {title}\n\n{text}" if title else text
-    return {
-        "text": body[:MAX_FILE_BYTES],
-        "id":   data.get("id") or str(id_in_file),
-        "metadata": {},
-    }
+def _wikibooks_pipeline(out_dir: Path, logs: Path, limit=None):
+    import xml.etree.ElementTree as ET
 
-def _wikibooks_pipeline(out_dir: Path, full: bool, workers: int, logs: Path, limit_override=None):
-    cap   = limit_override if limit_override is not None else (None if full else EXPERIMENT_CAPS["wikibooks"])
-    limit = cap if cap is not None else -1
-    pipeline = [
-        HuggingFaceDatasetReader(
-            dataset="wikimedia/wikibooks",
-            dataset_options={"name": "20231101.en", "split": "train"},
-            adapter=_wikibooks_adapter,
-            streaming=True,
-            limit=limit,
-        ),
-        JsonlWriter(output_folder=str(out_dir / "wikibooks")),
-    ]
-    return LocalPipelineExecutor(pipeline=pipeline, tasks=workers, logging_dir=str(logs / "wikibooks"))
+    out_path  = out_dir / "wikibooks"
+    out_path.mkdir(parents=True, exist_ok=True)
+    done_flag = out_path / "_done"
+    if done_flag.exists():
+        print("wikibooks: already done, skipping")
+        return
+
+    url = "https://dumps.wikimedia.org/enwikibooks/latest/enwikibooks-latest-pages-articles.xml.bz2"
+    try:
+        print(f"wikibooks: downloading {url} ...")
+        with urllib.request.urlopen(url, timeout=300) as resp:
+            compressed = resp.read()
+    except Exception as e:
+        print(f"wikibooks: download failed: {e} — skipping")
+        done_flag.touch()
+        return
+
+    cap = limit if limit is not None else EXPERIMENT_CAPS.get("wikibooks")
+    out_file = out_path / "wikibooks.jsonl.gz"
+    n = 0
+    ns = "http://www.mediawiki.org/xml/DTD/MediaWiki"
+
+    with gzip.open(out_file, "wt") as f:
+        xml_bytes = bz2.decompress(compressed)
+        for event, elem in ET.iterparse(io.BytesIO(xml_bytes), events=("end",)):
+            if not elem.tag.endswith("}page") and elem.tag != "page":
+                continue
+            if cap and n >= cap:
+                break
+            # namespace 0 = main articles only
+            ns_elem = elem.find(".//{%s}ns" % ns) or elem.find(".//ns")
+            if ns_elem is not None and ns_elem.text != "0":
+                elem.clear()
+                continue
+            title_elem = elem.find(".//{%s}title" % ns) or elem.find(".//title")
+            text_elem  = elem.find(".//{%s}text" % ns) or elem.find(".//text")
+            title = title_elem.text.strip() if title_elem is not None and title_elem.text else ""
+            text  = text_elem.text.strip()  if text_elem  is not None and text_elem.text  else ""
+            if text:
+                body = f"# {title}\n\n{text}" if title else text
+                f.write(json.dumps({"text": body[:MAX_FILE_BYTES], "id": title or str(n)}) + "\n")
+                n += 1
+            elem.clear()
+
+    done_flag.touch()
+    print(f"wikibooks: wrote {n} articles to {out_file}")
 
 
 # ── tldr-pages ────────────────────────────────────────────────────────────────
@@ -397,8 +417,6 @@ def _tldr_pages_pipeline(out_dir: Path, logs: Path):
 
 
 # ── Man pages ─────────────────────────────────────────────────────────────────
-# linux/man-pages GitHub mirror: section 1 (commands), 2 (syscalls), 3 (library).
-# Files are in troff/mdoc; we ship raw troff — tokenizer will see the markup.
 
 def _man_pages_pipeline(out_dir: Path, logs: Path):
     out_path  = out_dir / "man_pages"
@@ -423,11 +441,10 @@ def _man_pages_pipeline(out_dir: Path, logs: Path):
     with gzip.open(out_file, "wt") as f:
         with zipfile.ZipFile(io.BytesIO(content)) as zf:
             for name in zf.namelist():
-                # sections 1 (commands), 2 (syscalls), 3 (library), 7 (overview)
                 parts = name.split("/")
                 if len(parts) < 2:
                     continue
-                section = parts[-2]  # e.g. "man1", "man2"
+                section = parts[-2]
                 if not re.match(r"^man[1237]$", section):
                     continue
                 text = zf.read(name).decode("utf-8", errors="replace").strip()
@@ -439,10 +456,9 @@ def _man_pages_pipeline(out_dir: Path, logs: Path):
 
 
 # ── Python docs ───────────────────────────────────────────────────────────────
-# python.org hosts pre-built plaintext archives of all Python docs.
 
 def _python_docs_pipeline(out_dir: Path, logs: Path):
-    import tarfile, html
+    import tarfile
     out_path  = out_dir / "python_docs"
     out_path.mkdir(parents=True, exist_ok=True)
     done_flag = out_path / "_done"
@@ -450,13 +466,21 @@ def _python_docs_pipeline(out_dir: Path, logs: Path):
         print("python_docs: already done, skipping")
         return
 
-    url = "https://docs.python.org/3/archives/python-3.13-docs-text.tar.bz2"
-    try:
-        print(f"python_docs: downloading {url} ...")
-        with urllib.request.urlopen(url, timeout=120) as resp:
-            content = resp.read()
-    except Exception as e:
-        print(f"python_docs: download failed: {e} — skipping")
+    # Try recent Python versions in order
+    content = None
+    for ver in ("3.13", "3.12", "3.11", "3.10"):
+        url = f"https://docs.python.org/3/archives/python-{ver}-docs-text.tar.bz2"
+        try:
+            print(f"python_docs: trying {url} ...")
+            with urllib.request.urlopen(url, timeout=120) as resp:
+                content = resp.read()
+            print(f"python_docs: got {len(content)//1024}KB from {url}")
+            break
+        except Exception as e:
+            print(f"python_docs: {url} failed: {e}")
+
+    if not content:
+        print("python_docs: all URLs failed — skipping")
         done_flag.touch()
         return
 
@@ -480,7 +504,6 @@ def _python_docs_pipeline(out_dir: Path, logs: Path):
 
 
 # ── PEPs ──────────────────────────────────────────────────────────────────────
-# python/peps GitHub repo: RST source for all Python Enhancement Proposals.
 
 def _peps_pipeline(out_dir: Path, logs: Path):
     out_path  = out_dir / "peps"
@@ -501,7 +524,7 @@ def _peps_pipeline(out_dir: Path, logs: Path):
         return
 
     out_file = out_path / "peps.jsonl.gz"
-    _pep_re = re.compile(r"pep-\d{4}\.rst$")
+    _pep_re  = re.compile(r"pep-\d{4}\.rst$")
     n = 0
     with gzip.open(out_file, "wt") as f:
         with zipfile.ZipFile(io.BytesIO(content)) as zf:
@@ -518,40 +541,23 @@ def _peps_pipeline(out_dir: Path, logs: Path):
 
 
 # ── RFCs ──────────────────────────────────────────────────────────────────────
-# IETF RFC editor provides full text RFCs. We fetch the ones most relevant to
-# the dataset.md spec: HTTP, TLS, JSON, MIME, DNS, SMTP, TCP, IP, WebSocket.
 
 _KEY_RFCS = [
-    # HTTP
-    7230, 7231, 7232, 7233, 7234, 7235,  # HTTP/1.1 suite
-    7540,  # HTTP/2
-    9110, 9111, 9112,  # HTTP semantics (latest)
-    # TLS
-    8446,  # TLS 1.3
-    # JSON
-    8259,  # JSON
-    7159,  # JSON (superseded)
-    6901,  # JSON Pointer
-    6902,  # JSON Patch
-    # DNS
-    1034, 1035,
-    # SMTP
-    5321,
-    # TCP / IP
-    793, 791,
-    # WebSocket
-    6455,
-    # OAuth / JWT
-    6749, 7519, 7517,
-    # MIME
-    2045, 2046, 2047, 2048, 2049,
-    # URI
-    3986,
-    # SSH
-    4251, 4252, 4253,
-    # Misc networking
-    2616,  # HTTP/1.1 original (widely referenced)
-    2119,  # RFC key words (MUST, SHOULD...)
+    7230, 7231, 7232, 7233, 7234, 7235,  # HTTP/1.1
+    7540,                                 # HTTP/2
+    9110, 9111, 9112,                     # HTTP semantics (latest)
+    8446,                                 # TLS 1.3
+    8259, 7159, 6901, 6902,               # JSON
+    1034, 1035,                           # DNS
+    5321,                                 # SMTP
+    793, 791,                             # TCP/IP
+    6455,                                 # WebSocket
+    6749, 7519, 7517,                     # OAuth/JWT
+    2045, 2046, 2047, 2048, 2049,         # MIME
+    3986,                                 # URI
+    4251, 4252, 4253,                     # SSH
+    2616,                                 # HTTP/1.1 (original, widely cited)
+    2119,                                 # MUST/SHOULD/MAY keywords
 ]
 
 def _rfcs_pipeline(out_dir: Path, logs: Path):
@@ -582,10 +588,10 @@ def _rfcs_pipeline(out_dir: Path, logs: Path):
 
 # ── FineWeb-Edu ───────────────────────────────────────────────────────────────
 
-def _fineweb_adapter(self, data: dict, path: str, id_in_file: int) -> dict | None:
+def _fineweb_adapter(self, data: dict, path: str, id_in_file: int) -> dict:
     text = (data.get("text") or "").strip()
     if not text:
-        return None
+        return _SKIP
     return {
         "text": text[:MAX_FILE_BYTES],
         "id":   data.get("id") or str(id_in_file),
@@ -610,11 +616,11 @@ def _fineweb_edu_pipeline(out_dir: Path, full: bool, workers: int, logs: Path, l
 
 # ── ArXiv CS ──────────────────────────────────────────────────────────────────
 
-def _arxiv_adapter(self, data: dict, path: str, id_in_file: int) -> dict | None:
+def _arxiv_adapter(self, data: dict, path: str, id_in_file: int) -> dict:
     abstract = (data.get("abstract") or "").strip()
     article  = (data.get("article") or "").strip()
     if not article and not abstract:
-        return None
+        return _SKIP
     text = f"{abstract}\n\n{article}".strip() if abstract else article
     return {
         "text": text[:MAX_FILE_BYTES],
@@ -640,10 +646,10 @@ def _arxiv_pipeline(out_dir: Path, full: bool, workers: int, logs: Path, limit_o
 
 # ── Wikipedia ─────────────────────────────────────────────────────────────────
 
-def _wikipedia_adapter(self, data: dict, path: str, id_in_file: int) -> dict | None:
+def _wikipedia_adapter(self, data: dict, path: str, id_in_file: int) -> dict:
     text = (data.get("text") or "").strip()
     if not text:
-        return None
+        return _SKIP
     title = (data.get("title") or "").strip()
     body  = f"# {title}\n\n{text}" if title else text
     return {
@@ -670,11 +676,11 @@ def _wikipedia_pipeline(out_dir: Path, full: bool, workers: int, logs: Path, lim
 
 # ── FLAN v2 ───────────────────────────────────────────────────────────────────
 
-def _flan_adapter(self, data: dict, path: str, id_in_file: int) -> dict | None:
+def _flan_adapter(self, data: dict, path: str, id_in_file: int) -> dict:
     inp  = (data.get("inputs") or "").strip()
     out  = (data.get("targets") or "").strip()
     if not out:
-        return None
+        return _SKIP
     text = f"{inp}\n{out}" if inp else out
     return {
         "text": text[:MAX_FILE_BYTES],
@@ -700,14 +706,14 @@ def _flan_v2_pipeline(out_dir: Path, full: bool, workers: int, logs: Path, limit
 
 # ── Natural Instructions v2 ───────────────────────────────────────────────────
 
-def _natural_instructions_adapter(self, data: dict, path: str, id_in_file: int) -> dict | None:
+def _natural_instructions_adapter(self, data: dict, path: str, id_in_file: int) -> dict:
     inp = (data.get("input") or data.get("Instance", {}).get("input") or "").strip()
     out = (data.get("output") or "")
     if isinstance(out, list):
         out = out[0] if out else ""
     out = out.strip()
     if not out:
-        return None
+        return _SKIP
     definition = (data.get("Definition") or data.get("definition") or "")
     if isinstance(definition, list):
         definition = definition[0] if definition else ""
@@ -742,10 +748,10 @@ def _natural_instructions_pipeline(out_dir: Path, full: bool, workers: int, logs
 
 # ── OpenHermes 2.5 ────────────────────────────────────────────────────────────
 
-def _openhermes_adapter(self, data: dict, path: str, id_in_file: int) -> dict | None:
+def _openhermes_adapter(self, data: dict, path: str, id_in_file: int) -> dict:
     convs = data.get("conversations") or []
     if not convs:
-        return None
+        return _SKIP
     parts = []
     for turn in convs:
         role  = (turn.get("from") or "").strip()
@@ -755,7 +761,7 @@ def _openhermes_adapter(self, data: dict, path: str, id_in_file: int) -> dict | 
         label = "Human" if role == "human" else "Assistant"
         parts.append(f"{label}: {value}")
     if not parts:
-        return None
+        return _SKIP
     return {
         "text": "\n\n".join(parts)[:MAX_FILE_BYTES],
         "id":   str(id_in_file),
@@ -780,11 +786,11 @@ def _openhermes_pipeline(out_dir: Path, full: bool, workers: int, logs: Path, li
 
 # ── NuminaMath ────────────────────────────────────────────────────────────────
 
-def _numinamath_adapter(self, data: dict, path: str, id_in_file: int) -> dict | None:
+def _numinamath_adapter(self, data: dict, path: str, id_in_file: int) -> dict:
     problem  = (data.get("problem") or "").strip()
     solution = (data.get("solution") or "").strip()
     if not problem or not solution:
-        return None
+        return _SKIP
     return {
         "text": f"Problem: {problem}\n\nSolution: {solution}",
         "id":   str(id_in_file),
@@ -808,13 +814,12 @@ def _numinamath_pipeline(out_dir: Path, full: bool, workers: int, logs: Path, li
 
 
 # ── Competition / DeepMind Math ───────────────────────────────────────────────
-# lighteval/MATH: Hendrycks MATH benchmark — competition problems with solutions.
 
-def _competition_math_adapter(self, data: dict, path: str, id_in_file: int) -> dict | None:
+def _competition_math_adapter(self, data: dict, path: str, id_in_file: int) -> dict:
     problem  = (data.get("problem") or "").strip()
     solution = (data.get("solution") or "").strip()
     if not problem or not solution:
-        return None
+        return _SKIP
     level   = data.get("level") or ""
     subject = data.get("type") or ""
     header  = f"[{subject} | {level}]\n" if subject or level else ""
@@ -841,12 +846,11 @@ def _competition_math_pipeline(out_dir: Path, full: bool, workers: int, logs: Pa
 
 
 # ── Proof-Pile 2 ──────────────────────────────────────────────────────────────
-# EleutherAI/proof-pile-2: 55B-token math corpus; taking arxiv-math subset.
 
-def _proof_pile_adapter(self, data: dict, path: str, id_in_file: int) -> dict | None:
+def _proof_pile_adapter(self, data: dict, path: str, id_in_file: int) -> dict:
     text = (data.get("text") or "").strip()
     if not text:
-        return None
+        return _SKIP
     return {
         "text": text[:MAX_FILE_BYTES],
         "id":   str(id_in_file),
@@ -870,7 +874,6 @@ def _proof_pile_pipeline(out_dir: Path, full: bool, workers: int, logs: Path, li
 
 
 # ── Papers with Code ──────────────────────────────────────────────────────────
-# paperswithcode.com publishes a JSON dump of all paper abstracts.
 
 def _papers_with_code_pipeline(out_dir: Path, logs: Path, limit=None):
     out_path  = out_dir / "papers_with_code"
@@ -916,8 +919,6 @@ def _papers_with_code_pipeline(out_dir: Path, logs: Path, limit=None):
 
 
 # ── PyPI READMEs ──────────────────────────────────────────────────────────────
-# Fetch package descriptions from the PyPI JSON API.
-# Uses the top-pypi-packages list (30-day download stats) from GitHub.
 
 def _pypi_readmes_pipeline(out_dir: Path, logs: Path, limit=None):
     out_path  = out_dir / "pypi_readmes"
@@ -929,10 +930,9 @@ def _pypi_readmes_pipeline(out_dir: Path, logs: Path, limit=None):
 
     cap = limit if limit is not None else EXPERIMENT_CAPS.get("pypi_readmes") or 50_000
 
-    # Top PyPI packages by downloads (public dataset from hugovk/top-pypi-packages)
     top_url = "https://hugovk.github.io/top-pypi-packages/top-pypi-packages-30-days.min.json"
     try:
-        print(f"pypi_readmes: fetching package list from {top_url} ...")
+        print(f"pypi_readmes: fetching package list ...")
         with urllib.request.urlopen(top_url, timeout=30) as resp:
             top_data = json.loads(resp.read())
         pkg_names = [r["project"] for r in top_data.get("rows", [])[:cap]]
@@ -949,7 +949,7 @@ def _pypi_readmes_pipeline(out_dir: Path, logs: Path, limit=None):
             try:
                 with urllib.request.urlopen(url, timeout=10) as resp:
                     data = json.loads(resp.read())
-                info = data.get("info") or {}
+                info        = data.get("info") or {}
                 description = (info.get("description") or "").strip()
                 if not description or description == "UNKNOWN":
                     continue
@@ -962,17 +962,15 @@ def _pypi_readmes_pipeline(out_dir: Path, logs: Path, limit=None):
                 }) + "\n")
                 n += 1
             except Exception:
-                pass  # skip packages with no description or API errors
+                pass
     done_flag.touch()
-    print(f"pypi_readmes: wrote {n} package READMEs to {out_file}")
+    print(f"pypi_readmes: wrote {n} READMEs to {out_file}")
 
 
 # ── GitHub-hosted pedagogical sources ─────────────────────────────────────────
-# Small books / notebook collections fetched from GitHub as zip archives.
-# Each is a direct-download source like nl2bash.
 
-def _github_zip_notebooks(out_dir: Path, source_name: str, zip_url: str, extensions=(".ipynb",), timeout=120):
-    """Generic helper: download a GitHub repo zip, extract notebook/text files."""
+def _github_zip_notebooks(out_dir: Path, source_name: str, zip_url: str,
+                           extensions=(".ipynb",), timeout=120):
     out_path  = out_dir / source_name
     out_path.mkdir(parents=True, exist_ok=True)
     done_flag = out_path / "_done"
@@ -997,10 +995,9 @@ def _github_zip_notebooks(out_dir: Path, source_name: str, zip_url: str, extensi
                 if not any(name.endswith(ext) for ext in extensions):
                     continue
                 raw = zf.read(name)
-                # Jupyter notebooks: extract cell sources as text
                 if name.endswith(".ipynb"):
                     try:
-                        nb   = json.loads(raw.decode("utf-8", errors="replace"))
+                        nb    = json.loads(raw.decode("utf-8", errors="replace"))
                         cells = nb.get("cells") or nb.get("worksheets", [{}])[0].get("cells", [])
                         parts = []
                         for cell in cells:
@@ -1035,7 +1032,6 @@ def _python_ds_handbook_pipeline(out_dir: Path, logs: Path):
     )
 
 def _sicp_pipeline(out_dir: Path, logs: Path):
-    # SICP full text as HTML from the community mirror
     _github_zip_notebooks(
         out_dir, "sicp",
         "https://github.com/sarabander/sicp/archive/refs/heads/master.zip",
@@ -1043,7 +1039,7 @@ def _sicp_pipeline(out_dir: Path, logs: Path):
     )
 
 
-# ── nl2bash ───────────────────────────────────────────────────────────────────
+# ── NL2Bash ───────────────────────────────────────────────────────────────────
 
 def _nl2bash_pipeline(out_dir: Path, logs: Path):
     out_path  = out_dir / "nl2bash"
@@ -1066,8 +1062,8 @@ def _nl2bash_pipeline(out_dir: Path, logs: Path):
                 content = resp.read()
             if url.endswith(".parquet"):
                 import pyarrow.parquet as pq
-                table = pq.read_table(io.BytesIO(content))
-                df    = table.to_pydict()
+                table   = pq.read_table(io.BytesIO(content))
+                df      = table.to_pydict()
                 records = [{"nl": n, "bash": b} for n, b in zip(df.get("nl", []), df.get("bash", []))]
             else:
                 raw = json.loads(content)
@@ -1105,54 +1101,25 @@ def _nl2bash_pipeline(out_dir: Path, logs: Path):
 # ── CLI ───────────────────────────────────────────────────────────────────────
 
 # Not implemented (no public dataset / requires live scraping):
-#   - Dev.to + HashNode (2B): FineWeb-Edu sample-10BT likely covers much of this
+#   - Dev.to + HashNode (2B): FineWeb-Edu sample-10BT covers much of this
 #   - Git book + Docker docs + Bash manual (0.5B): scraping required
 #   - Library docs NumPy/Pandas/etc (0.1B): ReadTheDocs scraping required
-#   - Math Jupyter notebooks (0.5B): largely covered by `jupyter` source
-#   - Synthetic data (15B): milestone 3b — agentic traces not yet generated
+#   - Math Jupyter notebooks (0.5B): covered by `jupyter` source
+#   - Synthetic data (15B): milestone 3b — not yet generated
 
 ALL_SOURCES = list(STACK_V2_LANGS.keys()) + [
-    # Code
-    "jupyter",
-    "rosetta_code",
-    # Q&A
-    "stackoverflow",
-    "stack_exchange_other",
-    # Commits / issues
-    "github_commits",
-    "github_issues",
-    # Reference — HF
-    "wikibooks",
-    # Reference — direct download
-    "tldr_pages",
-    "man_pages",
-    "python_docs",
-    "peps",
-    "rfcs",
-    # NL / general knowledge
-    "fineweb_edu",
-    "arxiv",
-    "wikipedia",
-    # Instruction following
-    "flan_v2",
-    "natural_instructions",
-    "openhermes",
-    "nl2bash",
-    # Math
-    "numinamath",
-    "competition_math",
-    "proof_pile",
-    # Pedagogical + papers
-    "papers_with_code",
-    "pypi_readmes",
-    "fastai_notebooks",
-    "python_ds_handbook",
-    "sicp",
+    "jupyter", "rosetta_code",
+    "stackoverflow", "stack_exchange_other",
+    "github_commits", "github_issues",
+    "wikibooks", "tldr_pages", "man_pages", "python_docs", "peps", "rfcs",
+    "fineweb_edu", "arxiv", "wikipedia",
+    "flan_v2", "natural_instructions", "openhermes", "nl2bash",
+    "numinamath", "competition_math", "proof_pile",
+    "papers_with_code", "pypi_readmes", "fastai_notebooks", "python_ds_handbook", "sicp",
 ]
 
-# Sources dispatched via direct-download functions (no DataTrove executor)
 _DIRECT_SOURCES = {
-    "nl2bash", "tldr_pages", "man_pages", "python_docs", "peps", "rfcs",
+    "wikibooks", "nl2bash", "tldr_pages", "man_pages", "python_docs", "peps", "rfcs",
     "papers_with_code", "pypi_readmes", "fastai_notebooks", "python_ds_handbook", "sicp",
 }
 
@@ -1180,7 +1147,9 @@ def main():
     for source in sources:
         print(f"\n{'='*60}\n{source}  (full={args.full}, workers={args.workers})\n{'='*60}")
 
-        # Direct-download sources
+        if source == "wikibooks":
+            _wikibooks_pipeline(out_dir, logs_dir, limit=args.limit or EXPERIMENT_CAPS.get("wikibooks"))
+            continue
         if source == "nl2bash":
             _nl2bash_pipeline(out_dir, logs_dir)
             continue
@@ -1215,7 +1184,6 @@ def main():
             _sicp_pipeline(out_dir, logs_dir)
             continue
 
-        # DataTrove executor sources
         kw = dict(out_dir=out_dir, full=args.full, workers=args.workers,
                   logs=logs_dir, limit_override=args.limit)
         if source in STACK_V2_LANGS:
@@ -1232,8 +1200,6 @@ def main():
             executor = _github_commits_pipeline(**kw)
         elif source == "github_issues":
             executor = _github_issues_pipeline(**kw)
-        elif source == "wikibooks":
-            executor = _wikibooks_pipeline(**kw)
         elif source == "fineweb_edu":
             executor = _fineweb_edu_pipeline(**kw)
         elif source == "arxiv":
