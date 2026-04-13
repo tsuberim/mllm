@@ -323,6 +323,38 @@ def tokenize_phase2(commit: str) -> dict:
 @app.function(
     image=pipeline_image,
     cpu=2,
+    memory=1024,
+    volumes={DATA_ROOT: vol},
+    timeout=300,
+    secrets=[modal.Secret.from_name("merlin")],
+)
+def clear_sources(sources: str):
+    """
+    Remove pipeline-logs and processed output for the given comma-separated sources.
+    Run before re-filtering sources that previously produced bad/empty output.
+    """
+    import shutil
+    source_list = [s.strip() for s in sources.split(",")]
+    logs_dir      = f"{DATA_ROOT}/pipeline-logs"
+    processed_dir = f"{DATA_ROOT}/processed"
+    tok_dir       = f"{DATA_ROOT}/tokenized-new/.tok"
+
+    for src in source_list:
+        for base in [logs_dir, processed_dir, tok_dir]:
+            p = os.path.join(base, src)
+            if os.path.exists(p):
+                shutil.rmtree(p)
+                print(f"  removed {p}")
+            else:
+                print(f"  (not found) {p}")
+
+    vol.commit()
+    print(f"Cleared {len(source_list)} sources: {source_list}")
+
+
+@app.function(
+    image=pipeline_image,
+    cpu=2,
     memory=2048,
     volumes={DATA_ROOT: vol},
     timeout=60 * 60 * 12,
