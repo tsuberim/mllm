@@ -247,7 +247,7 @@ def _stack_exchange_other_pipeline(out_dir: Path, full: bool, workers: int, logs
     pipeline = [
         HuggingFaceDatasetReader(
             dataset="ArmelR/stack-exchange-instruction",
-            dataset_options={"split": "train"},
+            dataset_options={"split": "test"},
             adapter=_se_other_adapter,
             streaming=True,
             limit=limit,
