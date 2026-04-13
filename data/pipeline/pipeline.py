@@ -192,6 +192,13 @@ def _jupyter_adapter(self, data: dict, path: str, id_in_file: int) -> dict | Non
     cells = data.get("cells") or []
     parts = []
     for cell in cells:
+        if isinstance(cell, str):
+            try:
+                cell = json.loads(cell)
+            except Exception:
+                continue
+        if not isinstance(cell, dict):
+            continue
         ctype = cell.get("cell_type", "")
         src   = "".join(cell.get("source") or []).strip()
         if not src:
