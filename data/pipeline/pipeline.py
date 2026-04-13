@@ -94,7 +94,9 @@ EXPERIMENT_CAPS = {
     "sicp":                    None,   # ~1M   — always full
     # Math — DeepMind  [real: ~10 tok/doc; 226M total docs, 2.26B tokens full scale]
     # Budget: 1.5B × (8/88) = 136M tokens → 136M/10 = 13.6M docs
-    "deepmind_math":     14_000_000,
+    # Capped at 3M for experiment scale to stay within 6h container timeout
+    # (single-threaded loop; 3M docs ≈ 30M tokens, still meaningful contribution)
+    "deepmind_math":      3_000_000,
     # Reference — tech docs + library docs (small, always full)
     "tech_docs":               None,   # ~2M   — always full
     "library_docs":            None,   # broken — fix separately
