@@ -1092,33 +1092,53 @@ def _nl2bash_pipeline(out_dir: Path, logs: Path):
         print("nl2bash: already done, skipping")
         return
 
-    # Use HF datasets API (no pyarrow dependency, auth handled via HF token)
+    records = []
+
+    # Attempt 1: HF parquet (script-based datasets deprecated in recent datasets versions)
     try:
         from datasets import load_dataset
-        ds = load_dataset("jiacheng-ye/nl2bash", split="train", trust_remote_code=False)
+        ds = load_dataset("jiacheng-ye/nl2bash", split="train", trust_remote_code=True)
         records = list(ds)
-        print(f"nl2bash: loaded {len(records)} records from HF")
+        print(f"nl2bash: loaded {len(records)} records from HF (trust_remote_code)")
     except Exception as e:
-        print(f"nl2bash: HF load failed: {e} — trying GitHub raw ...")
-        records = []
-        urls = [
-            "https://raw.githubusercontent.com/TellinaTool/nl2bash/master/data/bash_scripts.json",
-            "https://raw.githubusercontent.com/TellinaTool/nl2bash/master/data/all_invocations.json",
-        ]
-        for url in urls:
-            try:
-                with urllib.request.urlopen(url, timeout=60) as resp:
-                    raw = json.loads(resp.read())
-                if isinstance(raw, list):
-                    records = raw
-                elif isinstance(raw, dict):
-                    for v in raw.values():
-                        if isinstance(v, dict):
-                            records.append({"nl": v.get("cmd_str", ""), "bash": v.get("invocation", "")})
-                if records:
-                    break
-            except Exception as e2:
-                print(f"nl2bash: {url} failed: {e2}")
+        print(f"nl2bash: HF trust_remote_code failed: {e}")
+
+    # Attempt 2: HF parquet files directly
+    if not records:
+        try:
+            from datasets import load_dataset
+            ds = load_dataset("parquet",
+                              data_files="hf://datasets/jiacheng-ye/nl2bash/**/*.parquet",
+                              split="train")
+            records = list(ds)
+            print(f"nl2bash: loaded {len(records)} records from HF parquet")
+        except Exception as e:
+            print(f"nl2bash: HF parquet failed: {e}")
+
+    # Attempt 3: TellinaTool GitHub — paired .nl/.cm files (one entry per line)
+    if not records:
+        try:
+            base = "https://raw.githubusercontent.com/TellinaTool/nl2bash/master/data"
+            splits = ["train", "dev", "test"]
+            nl_lines, cm_lines = [], []
+            for split in splits:
+                for ctx in (None, _SSL_UNVERIFIED):
+                    try:
+                        with urllib.request.urlopen(f"{base}/{split}.nl", context=ctx, timeout=60) as r:
+                            nl_lines += r.read().decode().splitlines()
+                        with urllib.request.urlopen(f"{base}/{split}.cm", context=ctx, timeout=60) as r:
+                            cm_lines += r.read().decode().splitlines()
+                        break
+                    except Exception:
+                        pass
+            if nl_lines and len(nl_lines) == len(cm_lines):
+                records = [{"nl": nl.strip(), "bash": cm.strip()}
+                           for nl, cm in zip(nl_lines, cm_lines) if nl.strip() and cm.strip()]
+                print(f"nl2bash: loaded {len(records)} records from GitHub .nl/.cm files")
+            else:
+                print(f"nl2bash: GitHub nl/cm mismatch: {len(nl_lines)} nl vs {len(cm_lines)} cm")
+        except Exception as e:
+            print(f"nl2bash: GitHub raw failed: {e}")
 
     if not records:
         print("nl2bash: WARNING — all fetch methods failed, skipping")
