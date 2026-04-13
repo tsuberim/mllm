@@ -375,22 +375,39 @@ def build_corpus(
     # ── step 3: upload to HF ──────────────────────────────────────────────────
     vol.reload()
     tokenized_dir = f"{DATA_ROOT}/tokenized-new"
-    print(f"\n[build_corpus] step 3: uploading to {hf_corpus_repo}")
+    scale = "full" if full else "experiment"
+    print(f"\n[build_corpus] step 3: uploading to {hf_corpus_repo} ({scale}/)")
     t0 = time.time()
     from huggingface_hub import HfApi, create_repo
     hf = HfApi()
     create_repo(hf_corpus_repo, repo_type="dataset", exist_ok=True,
                 token=os.environ.get("HF_TOKEN"))
+    # Upload README (only if not already present — avoids clobbering manual edits)
+    repo_dir   = _checkout(commit)
+    readme_src = os.path.join(repo_dir, "data/corpus_README.md")
+    if os.path.exists(readme_src):
+        try:
+            hf.upload_file(
+                path_or_fileobj=readme_src,
+                path_in_repo="README.md",
+                repo_id=hf_corpus_repo,
+                repo_type="dataset",
+                token=os.environ.get("HF_TOKEN"),
+            )
+            print("  uploaded README.md")
+        except Exception as e:
+            print(f"  WARNING: README upload failed: {e}")
+
     for fname in ["corpus_train.bin", "corpus_val.bin"]:
         src_path = f"{tokenized_dir}/{fname}"
         if not os.path.exists(src_path):
             print(f"  WARNING: {fname} not found, skipping")
             continue
         size_gb = os.path.getsize(src_path) / 1e9
-        print(f"  uploading {fname} ({size_gb:.2f} GB) ...")
+        print(f"  uploading {fname} ({size_gb:.2f} GB) → {scale}/{fname} ...")
         hf.upload_file(
             path_or_fileobj=src_path,
-            path_in_repo=f"data/{fname}",
+            path_in_repo=f"{scale}/{fname}",
             repo_id=hf_corpus_repo,
             repo_type="dataset",
             token=os.environ.get("HF_TOKEN"),
@@ -398,8 +415,8 @@ def build_corpus(
         print(f"    done")
     t1 = time.time()
     print(f"[build_corpus] step 3 done  ({t1-t0:.0f}s)")
-    print(f"\n[build_corpus] corpus published to {hf_corpus_repo}  total={t1-t_total:.0f}s")
-    return {"repo": hf_corpus_repo}
+    print(f"\n[build_corpus] corpus published to {hf_corpus_repo}/{scale}  total={t1-t_total:.0f}s")
+    return {"repo": hf_corpus_repo, "scale": scale}
 
 
 @app.function(
@@ -675,7 +692,7 @@ def build_corpus_entrypoint(
         workers=workers,
         hf_corpus_repo=hf_corpus_repo,
     )
-    print(f"\nCorpus published: {result['repo']}")
+    print(f"\nCorpus published: {result['repo']}/{result['scale']}")
 
 
 @app.function(
