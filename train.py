@@ -34,6 +34,7 @@ parser.add_argument("--wandb",      choices=["online", "disabled"], default="onl
 parser.add_argument("--bf16",             action="store_true", help="cast model to bfloat16 (required for ~7B on single GPU)")
 parser.add_argument("--grad_checkpoint",  action="store_true", help="gradient checkpointing (saves activation memory; enables large batches on big models)")
 parser.add_argument("--resume",       action="store_true", help="resume from existing checkpoint")
+parser.add_argument("--wandb_run_id", type=str, default=None, help="W&B run ID to resume (required when --resume)")
 parser.add_argument("--no_muon",      action="store_true", help="disable Muon; use AdamW for all params (diagnostic)")
 parser.add_argument("--tag",          type=str, default=None, help="tag for HF checkpoint filename (default: model name)")
 args = parser.parse_args()
@@ -221,6 +222,7 @@ EVAL_EVERY = args.eval_every if args.eval_every is not None else args.save_every
 # ── wandb ─────────────────────────────────────────────────────────────────────
 wandb.init(
     project="merlin", name=_tag,
+    id=args.wandb_run_id if args.wandb_run_id else None,
     resume="must" if args.resume else "never",
     mode=args.wandb,
     config={**model_cfg.__dict__, "batch_size": args.batch_size,

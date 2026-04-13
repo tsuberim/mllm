@@ -115,6 +115,7 @@ def train(
     bf16: bool = True,
     grad_checkpoint: bool = False,
     resume: bool = False,
+    wandb_run_id: str = "",
     no_muon: bool = False,
     tag: str = "",
 ) -> dict:
@@ -145,6 +146,8 @@ def train(
         cmd.append("--grad_checkpoint")
     if resume:
         cmd.append("--resume")
+    if wandb_run_id:
+        cmd += ["--wandb_run_id", wandb_run_id]
     if no_muon:
         cmd.append("--no_muon")
     cmd += ["--tag", tag or commit[:12]]
@@ -1127,6 +1130,7 @@ def main(
     bf16: bool = True,
     grad_checkpoint: bool = False,
     resume: bool = False,
+    wandb_run_id: str = "",
     no_muon: bool = False,
     tag: str = "",
 ):
@@ -1155,6 +1159,7 @@ def main(
         bf16=bf16,
         grad_checkpoint=grad_checkpoint,
         resume=resume,
+        wandb_run_id=wandb_run_id,
         no_muon=no_muon,
         tag=tag,
     )
