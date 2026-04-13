@@ -38,58 +38,62 @@ MAX_FILE_BYTES = 1_000_000
 _SKIP = {"text": ""}
 
 # ── experiment caps (document count) ─────────────────────────────────────────
+# Experiment caps calibrated to hit ~8B tokens total.
+# Derived from real tokens/doc observed on 2026-04-13 full-scale run.
+# Stack v2 tokens/doc are estimated (~1000-1500/doc); all others are real.
+# Non-stack-v2 targets ≈ 30% of observed full-scale.
+# Stack v2 targets ≈ proportional to dataset.md budgets, summing to ~3.9B.
 EXPERIMENT_CAPS = {
-    # Code — Stack v2
-    "stack_v2_python":      500_000,
-    "stack_v2_ts":          100_000,
-    "stack_v2_go":          100_000,
-    "stack_v2_rust":         80_000,
-    "stack_v2_bash":         80_000,
-    "stack_v2_yaml":         50_000,
-    "stack_v2_dockerfile":   30_000,
-    "stack_v2_sql":          80_000,
-    "stack_v2_md":          150_000,
-    # Code — other
-    "jupyter":               50_000,
-    "rosetta_code":            None,   # tiny ~1K — always full
-    # Q&A
-    "stackoverflow":        200_000,
-    "stack_exchange_other": 100_000,
-    # Commits / issues
-    "github_commits":       150_000,
-    "github_issues":        100_000,
-    # Reference — direct download (all small, always full unless overridden)
-    "wikibooks":             30_000,
-    "tldr_pages":              None,
-    "man_pages":               None,
-    "python_docs":             None,
-    "peps":                    None,
-    "rfcs":                    None,
-    # NL / general knowledge
-    "fineweb_edu":          200_000,
-    "arxiv":                 50_000,
-    "wikipedia":             50_000,
-    # Instruction following
-    "flan_v2":              100_000,
-    "natural_instructions":  50_000,
-    "openhermes":            50_000,
-    "nl2bash":                 None,
-    # Math
-    "numinamath":            50_000,
-    "competition_math":      30_000,
-    "proof_pile":            50_000,
-    # Pedagogical
-    "papers_with_code":      50_000,
-    "pypi_readmes":          50_000,
-    "fastai_notebooks":        None,
-    "python_ds_handbook":      None,
-    "sicp":                    None,
-    # Math — DeepMind
-    "deepmind_math":         100_000,
-    # Reference — tech docs (Git book + Docker docs + Bash manual)
-    "tech_docs":               None,
-    # Reference — library docs (NumPy, Pandas, sklearn, matplotlib, requests)
-    "library_docs":            None,
+    # Code — Stack v2 (~3.9B total est.)  [tokens/doc estimated]
+    "stack_v2_python":    1_500_000,   # ~1.8B est  (1200 tok/doc)
+    "stack_v2_ts":          380_000,   # ~456M est  (1200 tok/doc)
+    "stack_v2_go":          270_000,   # ~270M est  (1000 tok/doc)
+    "stack_v2_rust":        165_000,   # ~182M est  (1100 tok/doc)
+    "stack_v2_bash":        450_000,   # ~180M est  ( 400 tok/doc)
+    "stack_v2_yaml":        600_000,   # ~180M est  ( 300 tok/doc)
+    "stack_v2_dockerfile":  225_000,   # ~27M  est  ( 120 tok/doc)
+    "stack_v2_sql":         450_000,   # ~270M est  ( 600 tok/doc)
+    "stack_v2_md":          505_000,   # ~455M est  ( 900 tok/doc)
+    # Code — other  [real: 2810 tok/doc]
+    "jupyter":               21_000,   # ~59M  (was 69K full → 30%)
+    "rosetta_code":            None,   # ~25M  — always full (tiny)
+    # Q&A  [real: stackoverflow 889, stack_exchange_other 604 tok/doc]
+    "stackoverflow":        153_000,   # ~136M (was 511K full → 30%)
+    "stack_exchange_other": 240_000,   # ~145M (was 801K full → 30%)
+    # Commits / issues  [real: commits 267, issues 719 tok/doc]
+    "github_commits":        26_000,   # ~7M   (was 87K full → 30%)
+    "github_issues":        410_000,   # ~295M (was 1.36M full → 30%)
+    # Reference — direct download (small, always full)
+    "wikibooks":               None,   # ~55M  — always full
+    "tldr_pages":              None,   # ~7M   — always full
+    "man_pages":               None,   # ~2M   — always full
+    "python_docs":             None,   # ~3M   — always full
+    "peps":                    None,   # ~3M   — always full
+    "rfcs":                    None,   # ~1M   — always full
+    # NL / general knowledge  [real: fineweb 1182, arxiv 4653, wiki 834 tok/doc]
+    "fineweb_edu":          860_000,   # ~1.0B (was 2.87M full → 30%)
+    "arxiv":                122_000,   # ~568M (was 406K full → 30%)
+    "wikipedia":            428_000,   # ~357M (was 1.43M full → 30%)
+    # Instruction following  [real: flan 245, ni 271, oh 421 tok/doc]
+    "flan_v2":              417_000,   # ~102M (was 1.39M full → 30%)
+    "natural_instructions": 420_000,   # ~114M (was 1.40M full → 30%)
+    "openhermes":           300_000,   # ~126M (was 1.00M full → 30%)
+    "nl2bash":                 None,   # ~0.3M — always full (tiny)
+    # Math  [real: numinamath 520, competition 243, proof_pile 1939 tok/doc]
+    "numinamath":            75_000,   # ~39M  (was 250K full → 30%)
+    "competition_math":     120_000,   # ~29M  (was 395K full → 30%)
+    "proof_pile":           483_000,   # ~936M (was 1.61M full → 30%)
+    # Pedagogical (all small, always full)
+    "papers_with_code":        None,   # ~12M  — always full
+    "pypi_readmes":            None,   # ~31M  — always full
+    "fastai_notebooks":        None,   # ~0.3M — always full
+    "python_ds_handbook":      None,   # ~0.4M — always full
+    "sicp":                    None,   # ~1M   — always full
+    # Math — DeepMind  [tokens/doc unknown — always full until measured]
+    "deepmind_math":           None,
+    # Reference — tech docs + library docs (small, always full)
+    "tech_docs":               None,   # ~2M   — always full
+    "library_docs":            None,   # broken — fix separately
 }
 
 # ── Stack v2 ──────────────────────────────────────────────────────────────────
