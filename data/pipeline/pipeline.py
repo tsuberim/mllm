@@ -474,8 +474,8 @@ def _jupyter_pipeline(out_dir: Path, full: bool, workers: int, logs: Path, limit
 
     pipeline = [
         HuggingFaceDatasetReader(
-            # bigcode/jupyter-structured-cleaned-dedup: ~2.7M executed notebooks
-            dataset="bigcode/jupyter-structured-cleaned-dedup",
+            # codeparrot/github-jupyter-parsed: parsed notebooks (code + markdown cells)
+            dataset="codeparrot/github-jupyter-parsed",
             dataset_options={"split": "train"},
             adapter=_adapter,
             streaming=True,
@@ -491,8 +491,8 @@ def _nl2bash_pipeline(out_dir: Path, workers: int, logs: Path, limit_override=No
     """NL2Bash: ~10K natural-language → bash command pairs. Format: # <nl>\n<cmd>."""
 
     def _adapter(self, data: dict, path: str, id_in_file: int) -> dict | None:
-        nl  = (data.get("cmd_str") or data.get("invocation_desc") or "").strip()
-        cmd = (data.get("invocation") or data.get("cmd") or "").strip()
+        nl  = (data.get("nl") or "").strip()
+        cmd = (data.get("bash") or "").strip()
         if not nl or not cmd:
             return None
         return {
@@ -503,10 +503,9 @@ def _nl2bash_pipeline(out_dir: Path, workers: int, logs: Path, limit_override=No
 
     pipeline = [
         HuggingFaceDatasetReader(
-            # Lin et al. 2018 NL2Bash dataset (~10K NL→bash pairs, MIT)
-            # HF ID: bigcode/natural-language-queries (bash subset)
-            dataset="bigcode/natural-language-queries",
-            dataset_options={"split": "train"},
+            # jiacheng-ye/nl2bash: Lin et al. 2018, ~9.3K NL→bash pairs (MIT)
+            dataset="jiacheng-ye/nl2bash",
+            dataset_options={"split": "train+validation+test"},
             adapter=_adapter,
             streaming=True,
             limit=limit_override if limit_override is not None else -1,
