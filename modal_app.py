@@ -360,6 +360,68 @@ def clear_sources(sources: str):
     timeout=60 * 60 * 12,
     secrets=[modal.Secret.from_name("merlin")],
 )
+def repack(
+    commit: str,
+    full: bool = False,
+    hf_corpus_repo: str = "tsuberim/merlin-corpus-v1",
+):
+    """
+    Re-run phase 2b (global pack) + upload, using whatever .tok shards exist on the volume.
+    Use this after adding a new source (filter + tokenize_phase1 it separately, then repack).
+    """
+    import time
+    t0 = time.time()
+
+    print("\n[repack] step 2b: tokenize phase 2 (global pack)")
+    tokenize_phase2.remote(commit)
+    print(f"[repack] step 2b done  ({time.time()-t0:.0f}s)")
+
+    vol.reload()
+    tokenized_dir = f"{DATA_ROOT}/tokenized-new"
+    scale = "full" if full else "experiment"
+    print(f"\n[repack] step 3: uploading to {hf_corpus_repo} ({scale}/)")
+    t1 = time.time()
+    from huggingface_hub import HfApi, create_repo
+    hf = HfApi()
+    create_repo(hf_corpus_repo, repo_type="dataset", exist_ok=True,
+                token=os.environ.get("HF_TOKEN"))
+    repo_dir = _checkout(commit)
+    readme_src = os.path.join(repo_dir, "data/corpus_README.md")
+    if os.path.exists(readme_src):
+        try:
+            hf.upload_file(
+                path_or_fileobj=readme_src, path_in_repo="README.md",
+                repo_id=hf_corpus_repo, repo_type="dataset",
+                token=os.environ.get("HF_TOKEN"),
+            )
+            print("  uploaded README.md")
+        except Exception as e:
+            print(f"  WARNING: README upload failed: {e}")
+    for fname in ["corpus_train.bin", "corpus_val.bin"]:
+        src_path = f"{tokenized_dir}/{fname}"
+        if not os.path.exists(src_path):
+            print(f"  WARNING: {fname} not found, skipping")
+            continue
+        size_gb = os.path.getsize(src_path) / 1e9
+        print(f"  uploading {fname} ({size_gb:.2f} GB) → {scale}/{fname} ...")
+        hf.upload_file(
+            path_or_fileobj=src_path, path_in_repo=f"{scale}/{fname}",
+            repo_id=hf_corpus_repo, repo_type="dataset",
+            token=os.environ.get("HF_TOKEN"),
+        )
+        print(f"    done")
+    print(f"[repack] done  total={time.time()-t0:.0f}s → {hf_corpus_repo}/{scale}")
+    return {"repo": hf_corpus_repo, "scale": scale}
+
+
+@app.function(
+    image=pipeline_image,
+    cpu=2,
+    memory=2048,
+    volumes={DATA_ROOT: vol},
+    timeout=60 * 60 * 12,
+    secrets=[modal.Secret.from_name("merlin")],
+)
 def build_corpus(
     commit: str,
     sources: str = (
@@ -473,26 +535,45 @@ def build_corpus(
     secrets=[modal.Secret.from_name("merlin")],
 )
 def diagnose_stack_v2(lang: str = "Python"):
-    """Compare bigcode/the-stack (v1) vs the-stack-v2-dedup schema — verify content accessibility."""
-    import os
+    """
+    Verify SWH content fetch for the-stack-v2-dedup rows.
+    Prints blob_id / content_id values and tests SWH API resolution.
+    """
+    import os, requests
     from datasets import load_dataset
 
     token = os.environ.get("HF_TOKEN")
 
-    for dataset_name in ["bigcode/the-stack", "bigcode/the-stack-v2-dedup"]:
-        print(f"\n=== {dataset_name}, name={lang!r}, streaming=True ===")
-        try:
-            ds = load_dataset(dataset_name, name=lang, split="train",
-                              streaming=True, token=token)
-            row = next(iter(ds))
-            print(f"Keys: {list(row.keys())}")
-            content = row.get("content", "<MISSING>")
-            if content and content != "<MISSING>":
-                print(f"content[:200]: {content[:200]!r}")
-            else:
-                print(f"content field: {content!r}")
-        except Exception as e:
-            print(f"ERROR: {e}")
+    print(f"=== the-stack-v2-dedup, name={lang!r} — field values ===")
+    ds = load_dataset("bigcode/the-stack-v2-dedup", name=lang, split="train",
+                      streaming=True, token=token)
+    samples = []
+    for i, row in enumerate(ds):
+        if i >= 5:
+            break
+        samples.append(row)
+        print(f"\nRow {i}:")
+        print(f"  blob_id:    {row.get('blob_id')!r}")
+        print(f"  content_id: {row.get('content_id')!r}")
+        print(f"  path:       {row.get('path')!r}")
+        print(f"  length_bytes: {row.get('length_bytes')}")
+        print(f"  is_generated: {row.get('is_generated')}")
+        print(f"  is_vendor:    {row.get('is_vendor')}")
+        print(f"  star_events_count: {row.get('star_events_count')}")
+
+    print("\n=== Testing SWH API fetch for first 3 rows ===")
+    for row in samples[:3]:
+        content_id = row.get("content_id") or row.get("blob_id")
+        if not content_id:
+            print("  no id")
+            continue
+        for id_type in ["sha1_git", "sha1"]:
+            url = f"https://archive.softwareheritage.org/api/1/content/{id_type}:{content_id}/raw/"
+            r = requests.get(url, timeout=10)
+            print(f"  {id_type}:{content_id[:12]}... → HTTP {r.status_code} ({len(r.content)} bytes)")
+            if r.status_code == 200:
+                print(f"    content[:100]: {r.content[:100]!r}")
+                break
 
 
 @app.function(
