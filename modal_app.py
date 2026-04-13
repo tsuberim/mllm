@@ -321,10 +321,11 @@ def build_corpus(
         "jupyter,rosetta_code,"
         "stackoverflow,stack_exchange_other,"
         "github_commits,github_issues,"
-        "tldr_pages,"
+        "wikibooks,tldr_pages,man_pages,python_docs,peps,rfcs,"
         "fineweb_edu,arxiv,wikipedia,"
         "flan_v2,natural_instructions,openhermes,nl2bash,"
-        "numinamath,competition_math,proof_pile"
+        "numinamath,competition_math,proof_pile,"
+        "papers_with_code,pypi_readmes,fastai_notebooks,python_ds_handbook,sicp"
     ),
     full: bool = False,
     workers: int = 28,
@@ -631,10 +632,11 @@ def build_corpus_entrypoint(
         "jupyter,rosetta_code,"
         "stackoverflow,stack_exchange_other,"
         "github_commits,github_issues,"
-        "tldr_pages,"
+        "wikibooks,tldr_pages,man_pages,python_docs,peps,rfcs,"
         "fineweb_edu,arxiv,wikipedia,"
         "flan_v2,natural_instructions,openhermes,nl2bash,"
-        "numinamath,competition_math,proof_pile"
+        "numinamath,competition_math,proof_pile,"
+        "papers_with_code,pypi_readmes,fastai_notebooks,python_ds_handbook,sicp"
     ),
     full: bool = False,
     workers: int = 28,

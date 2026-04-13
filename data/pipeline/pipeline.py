@@ -10,15 +10,17 @@ Usage:
 
 import argparse
 import gzip
+import io
 import json
 import re
 import sys
+import urllib.request
+import zipfile
 from pathlib import Path
 
 from datatrove.executor import LocalPipelineExecutor
 from datatrove.pipeline.readers import HuggingFaceDatasetReader
 from datatrove.pipeline.writers import JsonlWriter
-from datatrove.data import Document
 
 MAX_FILE_BYTES = 1_000_000
 
@@ -45,8 +47,14 @@ EXPERIMENT_CAPS = {
     # Commits / issues
     "github_commits":       150_000,
     "github_issues":        100_000,
-    # Reference
-    "tldr_pages":              None,   # tiny ~7K docs — always full
+    # Reference — HF
+    "wikibooks":             30_000,
+    # Reference — direct download (small, always full)
+    "tldr_pages":              None,
+    "man_pages":               None,
+    "python_docs":             None,
+    "peps":                    None,
+    "rfcs":                    None,
     # NL / general knowledge
     "fineweb_edu":          200_000,
     "arxiv":                 50_000,
@@ -60,6 +68,12 @@ EXPERIMENT_CAPS = {
     "numinamath":            50_000,
     "competition_math":      30_000,
     "proof_pile":            50_000,
+    # Pedagogical — direct download
+    "papers_with_code":      50_000,
+    "pypi_readmes":          50_000,
+    "fastai_notebooks":        None,
+    "python_ds_handbook":      None,
+    "sicp":                    None,
 }
 
 # ── Stack v2 ──────────────────────────────────────────────────────────────────
@@ -134,7 +148,6 @@ def _jupyter_pipeline(out_dir: Path, full: bool, workers: int, logs: Path, limit
 
 
 # ── Rosetta Code ──────────────────────────────────────────────────────────────
-# cakiki/rosetta-code: task + language + code triples.
 
 def _rosetta_adapter(self, data: dict, path: str, id_in_file: int) -> dict | None:
     task = (data.get("task") or "").strip()
@@ -214,8 +227,8 @@ def _stackoverflow_pipeline(out_dir: Path, full: bool, workers: int, logs: Path,
 
 
 # ── Stack Exchange (other sites) ───────────────────────────────────────────────
-# ArmelR/stack-exchange-instruction covers Code Review, Unix, ServerFault,
-# AskUbuntu, SoftwareEngineering, DevOps, DataScience, etc.
+# ArmelR/stack-exchange-instruction: Code Review, Unix, ServerFault, AskUbuntu,
+# SoftwareEngineering, DevOps, DataScience, etc.
 
 def _se_other_adapter(self, data: dict, path: str, id_in_file: int) -> dict | None:
     instruction = (data.get("instruction") or data.get("question") or "").strip()
@@ -315,8 +328,38 @@ def _github_issues_pipeline(out_dir: Path, full: bool, workers: int, logs: Path,
     return LocalPipelineExecutor(pipeline=pipeline, tasks=workers, logging_dir=str(logs / "github_issues"))
 
 
+# ── Wikibooks ─────────────────────────────────────────────────────────────────
+# wikimedia/wikibooks: English Wikibooks (2023-11-01 snapshot).
+
+def _wikibooks_adapter(self, data: dict, path: str, id_in_file: int) -> dict | None:
+    text  = (data.get("text") or "").strip()
+    if not text:
+        return None
+    title = (data.get("title") or "").strip()
+    body  = f"# {title}\n\n{text}" if title else text
+    return {
+        "text": body[:MAX_FILE_BYTES],
+        "id":   data.get("id") or str(id_in_file),
+        "metadata": {},
+    }
+
+def _wikibooks_pipeline(out_dir: Path, full: bool, workers: int, logs: Path, limit_override=None):
+    cap   = limit_override if limit_override is not None else (None if full else EXPERIMENT_CAPS["wikibooks"])
+    limit = cap if cap is not None else -1
+    pipeline = [
+        HuggingFaceDatasetReader(
+            dataset="wikimedia/wikibooks",
+            dataset_options={"name": "20231101.en", "split": "train"},
+            adapter=_wikibooks_adapter,
+            streaming=True,
+            limit=limit,
+        ),
+        JsonlWriter(output_folder=str(out_dir / "wikibooks")),
+    ]
+    return LocalPipelineExecutor(pipeline=pipeline, tasks=workers, logging_dir=str(logs / "wikibooks"))
+
+
 # ── tldr-pages ────────────────────────────────────────────────────────────────
-# Direct download from GitHub; no HF dataset available.
 
 def _tldr_pages_pipeline(out_dir: Path, logs: Path):
     out_path  = out_dir / "tldr_pages"
@@ -326,7 +369,6 @@ def _tldr_pages_pipeline(out_dir: Path, logs: Path):
         print("tldr_pages: already done, skipping")
         return
 
-    import urllib.request, zipfile, io
     url = "https://github.com/tldr-pages/tldr/archive/refs/heads/main.zip"
     try:
         print(f"tldr_pages: downloading {url} ...")
@@ -352,8 +394,191 @@ def _tldr_pages_pipeline(out_dir: Path, logs: Path):
     print(f"tldr_pages: wrote {n} pages to {out_file}")
 
 
+# ── Man pages ─────────────────────────────────────────────────────────────────
+# linux/man-pages GitHub mirror: section 1 (commands), 2 (syscalls), 3 (library).
+# Files are in troff/mdoc; we ship raw troff — tokenizer will see the markup.
+
+def _man_pages_pipeline(out_dir: Path, logs: Path):
+    out_path  = out_dir / "man_pages"
+    out_path.mkdir(parents=True, exist_ok=True)
+    done_flag = out_path / "_done"
+    if done_flag.exists():
+        print("man_pages: already done, skipping")
+        return
+
+    url = "https://github.com/mkerrisk/man-pages/archive/refs/heads/master.zip"
+    try:
+        print(f"man_pages: downloading {url} ...")
+        with urllib.request.urlopen(url, timeout=120) as resp:
+            content = resp.read()
+    except Exception as e:
+        print(f"man_pages: download failed: {e} — skipping")
+        done_flag.touch()
+        return
+
+    out_file = out_path / "man_pages.jsonl.gz"
+    n = 0
+    with gzip.open(out_file, "wt") as f:
+        with zipfile.ZipFile(io.BytesIO(content)) as zf:
+            for name in zf.namelist():
+                # sections 1 (commands), 2 (syscalls), 3 (library), 7 (overview)
+                parts = name.split("/")
+                if len(parts) < 2:
+                    continue
+                section = parts[-2]  # e.g. "man1", "man2"
+                if not re.match(r"^man[1237]$", section):
+                    continue
+                text = zf.read(name).decode("utf-8", errors="replace").strip()
+                if text:
+                    f.write(json.dumps({"text": text, "id": name}) + "\n")
+                    n += 1
+    done_flag.touch()
+    print(f"man_pages: wrote {n} pages to {out_file}")
+
+
+# ── Python docs ───────────────────────────────────────────────────────────────
+# python.org hosts pre-built plaintext archives of all Python docs.
+
+def _python_docs_pipeline(out_dir: Path, logs: Path):
+    import tarfile, html
+    out_path  = out_dir / "python_docs"
+    out_path.mkdir(parents=True, exist_ok=True)
+    done_flag = out_path / "_done"
+    if done_flag.exists():
+        print("python_docs: already done, skipping")
+        return
+
+    url = "https://docs.python.org/3/archives/python-3.13-docs-text.tar.bz2"
+    try:
+        print(f"python_docs: downloading {url} ...")
+        with urllib.request.urlopen(url, timeout=120) as resp:
+            content = resp.read()
+    except Exception as e:
+        print(f"python_docs: download failed: {e} — skipping")
+        done_flag.touch()
+        return
+
+    out_file = out_path / "python_docs.jsonl.gz"
+    n = 0
+    with gzip.open(out_file, "wt") as f:
+        with tarfile.open(fileobj=io.BytesIO(content), mode="r:bz2") as tf:
+            for member in tf.getmembers():
+                if not member.name.endswith(".txt"):
+                    continue
+                fobj = tf.extractfile(member)
+                if fobj is None:
+                    continue
+                text = fobj.read().decode("utf-8", errors="replace").strip()
+                if text:
+                    doc_id = Path(member.name).stem
+                    f.write(json.dumps({"text": text[:MAX_FILE_BYTES], "id": doc_id}) + "\n")
+                    n += 1
+    done_flag.touch()
+    print(f"python_docs: wrote {n} docs to {out_file}")
+
+
+# ── PEPs ──────────────────────────────────────────────────────────────────────
+# python/peps GitHub repo: RST source for all Python Enhancement Proposals.
+
+def _peps_pipeline(out_dir: Path, logs: Path):
+    out_path  = out_dir / "peps"
+    out_path.mkdir(parents=True, exist_ok=True)
+    done_flag = out_path / "_done"
+    if done_flag.exists():
+        print("peps: already done, skipping")
+        return
+
+    url = "https://github.com/python/peps/archive/refs/heads/main.zip"
+    try:
+        print(f"peps: downloading {url} ...")
+        with urllib.request.urlopen(url, timeout=60) as resp:
+            content = resp.read()
+    except Exception as e:
+        print(f"peps: download failed: {e} — skipping")
+        done_flag.touch()
+        return
+
+    out_file = out_path / "peps.jsonl.gz"
+    _pep_re = re.compile(r"pep-\d{4}\.rst$")
+    n = 0
+    with gzip.open(out_file, "wt") as f:
+        with zipfile.ZipFile(io.BytesIO(content)) as zf:
+            for name in zf.namelist():
+                if not _pep_re.search(name):
+                    continue
+                text = zf.read(name).decode("utf-8", errors="replace").strip()
+                if text:
+                    doc_id = Path(name).stem
+                    f.write(json.dumps({"text": text, "id": doc_id}) + "\n")
+                    n += 1
+    done_flag.touch()
+    print(f"peps: wrote {n} PEPs to {out_file}")
+
+
+# ── RFCs ──────────────────────────────────────────────────────────────────────
+# IETF RFC editor provides full text RFCs. We fetch the ones most relevant to
+# the dataset.md spec: HTTP, TLS, JSON, MIME, DNS, SMTP, TCP, IP, WebSocket.
+
+_KEY_RFCS = [
+    # HTTP
+    7230, 7231, 7232, 7233, 7234, 7235,  # HTTP/1.1 suite
+    7540,  # HTTP/2
+    9110, 9111, 9112,  # HTTP semantics (latest)
+    # TLS
+    8446,  # TLS 1.3
+    # JSON
+    8259,  # JSON
+    7159,  # JSON (superseded)
+    6901,  # JSON Pointer
+    6902,  # JSON Patch
+    # DNS
+    1034, 1035,
+    # SMTP
+    5321,
+    # TCP / IP
+    793, 791,
+    # WebSocket
+    6455,
+    # OAuth / JWT
+    6749, 7519, 7517,
+    # MIME
+    2045, 2046, 2047, 2048, 2049,
+    # URI
+    3986,
+    # SSH
+    4251, 4252, 4253,
+    # Misc networking
+    2616,  # HTTP/1.1 original (widely referenced)
+    2119,  # RFC key words (MUST, SHOULD...)
+]
+
+def _rfcs_pipeline(out_dir: Path, logs: Path):
+    out_path  = out_dir / "rfcs"
+    out_path.mkdir(parents=True, exist_ok=True)
+    done_flag = out_path / "_done"
+    if done_flag.exists():
+        print("rfcs: already done, skipping")
+        return
+
+    out_file = out_path / "rfcs.jsonl.gz"
+    n = 0
+    with gzip.open(out_file, "wt") as f:
+        for rfc_num in _KEY_RFCS:
+            url = f"https://www.rfc-editor.org/rfc/rfc{rfc_num}.txt"
+            try:
+                with urllib.request.urlopen(url, timeout=30) as resp:
+                    text = resp.read().decode("utf-8", errors="replace").strip()
+                if text:
+                    f.write(json.dumps({"text": text[:MAX_FILE_BYTES], "id": f"rfc{rfc_num}"}) + "\n")
+                    n += 1
+                    print(f"  rfc{rfc_num}: ok")
+            except Exception as e:
+                print(f"  rfc{rfc_num}: failed ({e})")
+    done_flag.touch()
+    print(f"rfcs: wrote {n} RFCs to {out_file}")
+
+
 # ── FineWeb-Edu ───────────────────────────────────────────────────────────────
-# HuggingFaceFW/fineweb-edu: high-quality educational web text (score ≥ 4).
 
 def _fineweb_adapter(self, data: dict, path: str, id_in_file: int) -> dict | None:
     text = (data.get("text") or "").strip()
@@ -382,7 +607,6 @@ def _fineweb_edu_pipeline(out_dir: Path, full: bool, workers: int, logs: Path, l
 
 
 # ── ArXiv CS ──────────────────────────────────────────────────────────────────
-# scientific_papers (arxiv config): abstract + full article body.
 
 def _arxiv_adapter(self, data: dict, path: str, id_in_file: int) -> dict | None:
     abstract = (data.get("abstract") or "").strip()
@@ -413,7 +637,6 @@ def _arxiv_pipeline(out_dir: Path, full: bool, workers: int, logs: Path, limit_o
 
 
 # ── Wikipedia ─────────────────────────────────────────────────────────────────
-# wikimedia/wikipedia: English Wikipedia (2023-11-01 snapshot).
 
 def _wikipedia_adapter(self, data: dict, path: str, id_in_file: int) -> dict | None:
     text = (data.get("text") or "").strip()
@@ -444,7 +667,6 @@ def _wikipedia_pipeline(out_dir: Path, full: bool, workers: int, logs: Path, lim
 
 
 # ── FLAN v2 ───────────────────────────────────────────────────────────────────
-# Muennighoff/flan: aggregated FLAN v2 instruction-following mix.
 
 def _flan_adapter(self, data: dict, path: str, id_in_file: int) -> dict | None:
     inp  = (data.get("inputs") or "").strip()
@@ -475,7 +697,6 @@ def _flan_v2_pipeline(out_dir: Path, full: bool, workers: int, logs: Path, limit
 
 
 # ── Natural Instructions v2 ───────────────────────────────────────────────────
-# allenai/natural_instructions: 1600+ task types, input/output pairs.
 
 def _natural_instructions_adapter(self, data: dict, path: str, id_in_file: int) -> dict | None:
     inp = (data.get("input") or data.get("Instance", {}).get("input") or "").strip()
@@ -518,7 +739,6 @@ def _natural_instructions_pipeline(out_dir: Path, full: bool, workers: int, logs
 
 
 # ── OpenHermes 2.5 ────────────────────────────────────────────────────────────
-# teknium/OpenHermes-2.5: Mistral-generated instruction-following conversations.
 
 def _openhermes_adapter(self, data: dict, path: str, id_in_file: int) -> dict | None:
     convs = data.get("conversations") or []
@@ -557,7 +777,6 @@ def _openhermes_pipeline(out_dir: Path, full: bool, workers: int, logs: Path, li
 
 
 # ── NuminaMath ────────────────────────────────────────────────────────────────
-# AI-MO/NuminaMath-CoT: competition math problems with chain-of-thought solutions.
 
 def _numinamath_adapter(self, data: dict, path: str, id_in_file: int) -> dict | None:
     problem  = (data.get("problem") or "").strip()
@@ -587,8 +806,7 @@ def _numinamath_pipeline(out_dir: Path, full: bool, workers: int, logs: Path, li
 
 
 # ── Competition / DeepMind Math ───────────────────────────────────────────────
-# lighteval/MATH: Hendrycks MATH benchmark problems with worked solutions.
-# Proxies for "DeepMind Mathematics" slot in dataset.md (synthetic, broad coverage).
+# lighteval/MATH: Hendrycks MATH benchmark — competition problems with solutions.
 
 def _competition_math_adapter(self, data: dict, path: str, id_in_file: int) -> dict | None:
     problem  = (data.get("problem") or "").strip()
@@ -621,8 +839,7 @@ def _competition_math_pipeline(out_dir: Path, full: bool, workers: int, logs: Pa
 
 
 # ── Proof-Pile 2 ──────────────────────────────────────────────────────────────
-# EleutherAI/proof-pile-2: 55B-token math pretraining corpus; taking ~5% subset.
-# Using the arxiv-math subset for maximum signal density.
+# EleutherAI/proof-pile-2: 55B-token math corpus; taking arxiv-math subset.
 
 def _proof_pile_adapter(self, data: dict, path: str, id_in_file: int) -> dict | None:
     text = (data.get("text") or "").strip()
@@ -650,8 +867,181 @@ def _proof_pile_pipeline(out_dir: Path, full: bool, workers: int, logs: Path, li
     return LocalPipelineExecutor(pipeline=pipeline, tasks=workers, logging_dir=str(logs / "proof_pile"))
 
 
+# ── Papers with Code ──────────────────────────────────────────────────────────
+# paperswithcode.com publishes a JSON dump of all paper abstracts.
+
+def _papers_with_code_pipeline(out_dir: Path, logs: Path, limit=None):
+    out_path  = out_dir / "papers_with_code"
+    out_path.mkdir(parents=True, exist_ok=True)
+    done_flag = out_path / "_done"
+    if done_flag.exists():
+        print("papers_with_code: already done, skipping")
+        return
+
+    url = "https://production-media.paperswithcode.com/about/papers-with-abstracts.json.gz"
+    try:
+        print(f"papers_with_code: downloading {url} ...")
+        with urllib.request.urlopen(url, timeout=120) as resp:
+            raw = resp.read()
+    except Exception as e:
+        print(f"papers_with_code: download failed: {e} — skipping")
+        done_flag.touch()
+        return
+
+    try:
+        papers = json.loads(gzip.decompress(raw))
+    except Exception as e:
+        print(f"papers_with_code: parse failed: {e} — skipping")
+        done_flag.touch()
+        return
+
+    cap = limit if limit is not None else EXPERIMENT_CAPS.get("papers_with_code")
+    out_file = out_path / "papers_with_code.jsonl.gz"
+    n = 0
+    with gzip.open(out_file, "wt") as f:
+        for paper in papers:
+            if cap and n >= cap:
+                break
+            title    = (paper.get("title") or "").strip()
+            abstract = (paper.get("abstract") or "").strip()
+            if not abstract:
+                continue
+            text = f"# {title}\n\n{abstract}" if title else abstract
+            f.write(json.dumps({"text": text, "id": paper.get("paper_id") or str(n)}) + "\n")
+            n += 1
+    done_flag.touch()
+    print(f"papers_with_code: wrote {n} papers to {out_file}")
+
+
+# ── PyPI READMEs ──────────────────────────────────────────────────────────────
+# Fetch package descriptions from the PyPI JSON API.
+# Uses the top-pypi-packages list (30-day download stats) from GitHub.
+
+def _pypi_readmes_pipeline(out_dir: Path, logs: Path, limit=None):
+    out_path  = out_dir / "pypi_readmes"
+    out_path.mkdir(parents=True, exist_ok=True)
+    done_flag = out_path / "_done"
+    if done_flag.exists():
+        print("pypi_readmes: already done, skipping")
+        return
+
+    cap = limit if limit is not None else EXPERIMENT_CAPS.get("pypi_readmes") or 50_000
+
+    # Top PyPI packages by downloads (public dataset from hugovk/top-pypi-packages)
+    top_url = "https://hugovk.github.io/top-pypi-packages/top-pypi-packages-30-days.min.json"
+    try:
+        print(f"pypi_readmes: fetching package list from {top_url} ...")
+        with urllib.request.urlopen(top_url, timeout=30) as resp:
+            top_data = json.loads(resp.read())
+        pkg_names = [r["project"] for r in top_data.get("rows", [])[:cap]]
+    except Exception as e:
+        print(f"pypi_readmes: failed to fetch package list: {e} — skipping")
+        done_flag.touch()
+        return
+
+    out_file = out_path / "pypi_readmes.jsonl.gz"
+    n = 0
+    with gzip.open(out_file, "wt") as f:
+        for pkg in pkg_names:
+            url = f"https://pypi.org/pypi/{pkg}/json"
+            try:
+                with urllib.request.urlopen(url, timeout=10) as resp:
+                    data = json.loads(resp.read())
+                info = data.get("info") or {}
+                description = (info.get("description") or "").strip()
+                if not description or description == "UNKNOWN":
+                    continue
+                name    = info.get("name") or pkg
+                version = info.get("version") or ""
+                header  = f"# {name} {version}\n\n" if version else f"# {name}\n\n"
+                f.write(json.dumps({
+                    "text": (header + description)[:MAX_FILE_BYTES],
+                    "id":   name,
+                }) + "\n")
+                n += 1
+            except Exception:
+                pass  # skip packages with no description or API errors
+    done_flag.touch()
+    print(f"pypi_readmes: wrote {n} package READMEs to {out_file}")
+
+
+# ── GitHub-hosted pedagogical sources ─────────────────────────────────────────
+# Small books / notebook collections fetched from GitHub as zip archives.
+# Each is a direct-download source like nl2bash.
+
+def _github_zip_notebooks(out_dir: Path, source_name: str, zip_url: str, extensions=(".ipynb",), timeout=120):
+    """Generic helper: download a GitHub repo zip, extract notebook/text files."""
+    out_path  = out_dir / source_name
+    out_path.mkdir(parents=True, exist_ok=True)
+    done_flag = out_path / "_done"
+    if done_flag.exists():
+        print(f"{source_name}: already done, skipping")
+        return
+
+    try:
+        print(f"{source_name}: downloading {zip_url} ...")
+        with urllib.request.urlopen(zip_url, timeout=timeout) as resp:
+            content = resp.read()
+    except Exception as e:
+        print(f"{source_name}: download failed: {e} — skipping")
+        done_flag.touch()
+        return
+
+    out_file = out_path / f"{source_name}.jsonl.gz"
+    n = 0
+    with gzip.open(out_file, "wt") as f:
+        with zipfile.ZipFile(io.BytesIO(content)) as zf:
+            for name in zf.namelist():
+                if not any(name.endswith(ext) for ext in extensions):
+                    continue
+                raw = zf.read(name)
+                # Jupyter notebooks: extract cell sources as text
+                if name.endswith(".ipynb"):
+                    try:
+                        nb   = json.loads(raw.decode("utf-8", errors="replace"))
+                        cells = nb.get("cells") or nb.get("worksheets", [{}])[0].get("cells", [])
+                        parts = []
+                        for cell in cells:
+                            src = cell.get("source") or cell.get("input") or ""
+                            if isinstance(src, list):
+                                src = "".join(src)
+                            src = src.strip()
+                            if src:
+                                parts.append(src)
+                        text = "\n\n".join(parts).strip()
+                    except Exception:
+                        text = raw.decode("utf-8", errors="replace").strip()
+                else:
+                    text = raw.decode("utf-8", errors="replace").strip()
+                if text:
+                    f.write(json.dumps({"text": text[:MAX_FILE_BYTES], "id": name}) + "\n")
+                    n += 1
+    done_flag.touch()
+    print(f"{source_name}: wrote {n} docs to {out_file}")
+
+
+def _fastai_notebooks_pipeline(out_dir: Path, logs: Path):
+    _github_zip_notebooks(
+        out_dir, "fastai_notebooks",
+        "https://github.com/fastai/fastbook/archive/refs/heads/master.zip",
+    )
+
+def _python_ds_handbook_pipeline(out_dir: Path, logs: Path):
+    _github_zip_notebooks(
+        out_dir, "python_ds_handbook",
+        "https://github.com/jakevdp/PythonDataScienceHandbook/archive/refs/heads/master.zip",
+    )
+
+def _sicp_pipeline(out_dir: Path, logs: Path):
+    # SICP full text as HTML from the community mirror
+    _github_zip_notebooks(
+        out_dir, "sicp",
+        "https://github.com/sarabander/sicp/archive/refs/heads/master.zip",
+        extensions=(".html", ".xml"),
+    )
+
+
 # ── nl2bash ───────────────────────────────────────────────────────────────────
-# jiacheng-ye/nl2bash uses a legacy HF loading script. Fetch raw data directly.
 
 def _nl2bash_pipeline(out_dir: Path, logs: Path):
     out_path  = out_dir / "nl2bash"
@@ -661,7 +1051,6 @@ def _nl2bash_pipeline(out_dir: Path, logs: Path):
         print("nl2bash: already done, skipping")
         return
 
-    import urllib.request
     urls = [
         "https://raw.githubusercontent.com/TellinaTool/nl2bash/master/data/bash_scripts.json",
         "https://raw.githubusercontent.com/TellinaTool/nl2bash/master/data/all_invocations.json",
@@ -674,7 +1063,7 @@ def _nl2bash_pipeline(out_dir: Path, logs: Path):
             with urllib.request.urlopen(url, timeout=30) as resp:
                 content = resp.read()
             if url.endswith(".parquet"):
-                import io, pyarrow.parquet as pq
+                import pyarrow.parquet as pq
                 table = pq.read_table(io.BytesIO(content))
                 df    = table.to_pydict()
                 records = [{"nl": n, "bash": b} for n, b in zip(df.get("nl", []), df.get("bash", []))]
@@ -713,13 +1102,12 @@ def _nl2bash_pipeline(out_dir: Path, logs: Path):
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
 
-# Sources NOT yet implemented (not on HuggingFace or require custom scraping):
-#   - PyPI package READMEs (no clean HF dataset)
-#   - Papers with Code (paperswithcode.com API, not on HF)
-#   - Man pages, Python stdlib docs, PEPs, RFC docs (require direct download/scraping)
-#   - Dev.to, HashNode, Wikibooks, Fast.ai, SICP (web scraping)
-#   - Math Jupyter notebooks (no unified HF dataset)
-#   - Synthetic data (agentic traces — milestone 3b, not yet generated)
+# Not implemented (no public dataset / requires live scraping):
+#   - Dev.to + HashNode (2B): FineWeb-Edu sample-10BT likely covers much of this
+#   - Git book + Docker docs + Bash manual (0.5B): scraping required
+#   - Library docs NumPy/Pandas/etc (0.1B): ReadTheDocs scraping required
+#   - Math Jupyter notebooks (0.5B): largely covered by `jupyter` source
+#   - Synthetic data (15B): milestone 3b — agentic traces not yet generated
 
 ALL_SOURCES = list(STACK_V2_LANGS.keys()) + [
     # Code
@@ -731,8 +1119,14 @@ ALL_SOURCES = list(STACK_V2_LANGS.keys()) + [
     # Commits / issues
     "github_commits",
     "github_issues",
-    # Reference (direct download)
+    # Reference — HF
+    "wikibooks",
+    # Reference — direct download
     "tldr_pages",
+    "man_pages",
+    "python_docs",
+    "peps",
+    "rfcs",
     # NL / general knowledge
     "fineweb_edu",
     "arxiv",
@@ -746,10 +1140,19 @@ ALL_SOURCES = list(STACK_V2_LANGS.keys()) + [
     "numinamath",
     "competition_math",
     "proof_pile",
+    # Pedagogical + papers
+    "papers_with_code",
+    "pypi_readmes",
+    "fastai_notebooks",
+    "python_ds_handbook",
+    "sicp",
 ]
 
-# Sources handled via direct download (no DataTrove executor)
-_DIRECT_SOURCES = {"nl2bash", "tldr_pages"}
+# Sources dispatched via direct-download functions (no DataTrove executor)
+_DIRECT_SOURCES = {
+    "nl2bash", "tldr_pages", "man_pages", "python_docs", "peps", "rfcs",
+    "papers_with_code", "pypi_readmes", "fastai_notebooks", "python_ds_handbook", "sicp",
+}
 
 def main():
     parser = argparse.ArgumentParser(description="Corpus pipeline: download + format")
@@ -782,6 +1185,33 @@ def main():
         if source == "tldr_pages":
             _tldr_pages_pipeline(out_dir, logs_dir)
             continue
+        if source == "man_pages":
+            _man_pages_pipeline(out_dir, logs_dir)
+            continue
+        if source == "python_docs":
+            _python_docs_pipeline(out_dir, logs_dir)
+            continue
+        if source == "peps":
+            _peps_pipeline(out_dir, logs_dir)
+            continue
+        if source == "rfcs":
+            _rfcs_pipeline(out_dir, logs_dir)
+            continue
+        if source == "papers_with_code":
+            _papers_with_code_pipeline(out_dir, logs_dir, limit=args.limit or EXPERIMENT_CAPS.get("papers_with_code"))
+            continue
+        if source == "pypi_readmes":
+            _pypi_readmes_pipeline(out_dir, logs_dir, limit=args.limit)
+            continue
+        if source == "fastai_notebooks":
+            _fastai_notebooks_pipeline(out_dir, logs_dir)
+            continue
+        if source == "python_ds_handbook":
+            _python_ds_handbook_pipeline(out_dir, logs_dir)
+            continue
+        if source == "sicp":
+            _sicp_pipeline(out_dir, logs_dir)
+            continue
 
         # DataTrove executor sources
         kw = dict(out_dir=out_dir, full=args.full, workers=args.workers,
@@ -800,6 +1230,8 @@ def main():
             executor = _github_commits_pipeline(**kw)
         elif source == "github_issues":
             executor = _github_issues_pipeline(**kw)
+        elif source == "wikibooks":
+            executor = _wikibooks_pipeline(**kw)
         elif source == "fineweb_edu":
             executor = _fineweb_edu_pipeline(**kw)
         elif source == "arxiv":
