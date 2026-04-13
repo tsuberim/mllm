@@ -336,9 +336,14 @@ def _wikibooks_pipeline(out_dir: Path, logs: Path, limit=None):
     out_path  = out_dir / "wikibooks"
     out_path.mkdir(parents=True, exist_ok=True)
     done_flag = out_path / "_done"
-    if done_flag.exists():
+    empty_flag = out_path / "_empty"  # written if previous run produced 0 docs (bug)
+    if done_flag.exists() and not empty_flag.exists():
         print("wikibooks: already done, skipping")
         return
+    # Clear stale flags so we retry
+    for f in (done_flag, empty_flag):
+        if f.exists():
+            f.unlink()
 
     url = "https://dumps.wikimedia.org/enwikibooks/latest/enwikibooks-latest-pages-articles.xml.bz2"
     try:
@@ -353,32 +358,38 @@ def _wikibooks_pipeline(out_dir: Path, logs: Path, limit=None):
     cap = limit if limit is not None else EXPERIMENT_CAPS.get("wikibooks")
     out_file = out_path / "wikibooks.jsonl.gz"
     n = 0
-    ns = "http://www.mediawiki.org/xml/DTD/MediaWiki"
+
+    def _local(tag):
+        """Strip XML namespace prefix: {ns}tag → tag"""
+        return tag.split("}", 1)[-1] if "}" in tag else tag
 
     with gzip.open(out_file, "wt") as f:
         xml_bytes = bz2.decompress(compressed)
         for event, elem in ET.iterparse(io.BytesIO(xml_bytes), events=("end",)):
-            if not elem.tag.endswith("}page") and elem.tag != "page":
+            if _local(elem.tag) != "page":
                 continue
             if cap and n >= cap:
                 break
-            # namespace 0 = main articles only
-            ns_elem = elem.find(".//{%s}ns" % ns) or elem.find(".//ns")
-            if ns_elem is not None and ns_elem.text != "0":
+            ns_text    = next((c.text for c in elem.iter() if _local(c.tag) == "ns"), None)
+            if ns_text != "0":
                 elem.clear()
                 continue
-            title_elem = elem.find(".//{%s}title" % ns) or elem.find(".//title")
-            text_elem  = elem.find(".//{%s}text" % ns) or elem.find(".//text")
-            title = title_elem.text.strip() if title_elem is not None and title_elem.text else ""
-            text  = text_elem.text.strip()  if text_elem  is not None and text_elem.text  else ""
+            title_text = next((c.text for c in elem.iter() if _local(c.tag) == "title"), None)
+            wikitext   = next((c.text for c in elem.iter() if _local(c.tag) == "text"), None)
+            title = (title_text or "").strip()
+            text  = (wikitext  or "").strip()
             if text:
                 body = f"# {title}\n\n{text}" if title else text
                 f.write(json.dumps({"text": body[:MAX_FILE_BYTES], "id": title or str(n)}) + "\n")
                 n += 1
             elem.clear()
 
-    done_flag.touch()
-    print(f"wikibooks: wrote {n} articles to {out_file}")
+    if n == 0:
+        empty_flag.touch()
+        print(f"wikibooks: WARNING — wrote 0 articles; will retry next run")
+    else:
+        done_flag.touch()
+        print(f"wikibooks: wrote {n} articles to {out_file}")
 
 
 # ── tldr-pages ────────────────────────────────────────────────────────────────
@@ -638,7 +649,7 @@ def _arxiv_pipeline(out_dir: Path, full: bool, workers: int, logs: Path, limit_o
     pipeline = [
         HuggingFaceDatasetReader(
             dataset="ccdv/arxiv-summarization",
-            dataset_options={"name": "long", "split": "train"},
+            dataset_options={"name": "document", "split": "train"},
             adapter=_arxiv_adapter,
             streaming=True,
             limit=limit,
