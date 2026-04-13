@@ -123,11 +123,21 @@ def _stack_v2_pipeline(source: str, out_dir: Path, full: bool, workers: int, log
 # ── Jupyter notebooks ─────────────────────────────────────────────────────────
 
 def _jupyter_adapter(self, data: dict, path: str, id_in_file: int) -> dict:
-    content = data.get("content") or ""
-    if not content:
+    # codeparrot/github-jupyter-parsed schema: cells (list[str]), types (list[str])
+    cells = data.get("cells") or []
+    types = data.get("types") or []
+    if not cells:
+        return _SKIP
+    parts = []
+    for cell, ctype in zip(cells, types) if types else zip(cells, [""] * len(cells)):
+        cell = cell.strip() if isinstance(cell, str) else ""
+        if cell:
+            parts.append(cell)
+    text = "\n\n".join(parts).strip()
+    if not text:
         return _SKIP
     return {
-        "text": content[:MAX_FILE_BYTES],
+        "text": text[:MAX_FILE_BYTES],
         "id":   str(id_in_file),
         "metadata": {},
     }
@@ -477,10 +487,10 @@ def _python_docs_pipeline(out_dir: Path, logs: Path):
         print("python_docs: already done, skipping")
         return
 
-    # Try recent Python versions in order
+    # Try recent Python versions in order; URL uses version-specific path
     content = None
     for ver in ("3.13", "3.12", "3.11", "3.10"):
-        url = f"https://docs.python.org/3/archives/python-{ver}-docs-text.tar.bz2"
+        url = f"https://docs.python.org/{ver}/archives/python-{ver}-docs-text.tar.bz2"
         try:
             print(f"python_docs: trying {url} ...")
             with urllib.request.urlopen(url, timeout=120) as resp:
@@ -722,14 +732,15 @@ def _flan_v2_pipeline(out_dir: Path, full: bool, workers: int, logs: Path, limit
 # ── Natural Instructions v2 ───────────────────────────────────────────────────
 
 def _natural_instructions_adapter(self, data: dict, path: str, id_in_file: int) -> dict:
-    inp = (data.get("input") or data.get("Instance", {}).get("input") or "").strip()
-    out = (data.get("output") or "")
-    if isinstance(out, list):
-        out = out[0] if out else ""
-    out = out.strip()
+    # Muennighoff/natural-instructions schema: task_name, id, definition, inputs, targets
+    inp = (data.get("inputs") or data.get("input") or "").strip()
+    targets = data.get("targets") or data.get("output") or []
+    if isinstance(targets, str):
+        targets = [targets]
+    out = targets[0].strip() if targets else ""
     if not out:
         return _SKIP
-    definition = (data.get("Definition") or data.get("definition") or "")
+    definition = (data.get("definition") or data.get("Definition") or "")
     if isinstance(definition, list):
         definition = definition[0] if definition else ""
     definition = definition.strip()
@@ -1054,7 +1065,8 @@ def _sicp_pipeline(out_dir: Path, logs: Path):
     _github_zip_notebooks(
         out_dir, "sicp",
         "https://github.com/sarabander/sicp/archive/refs/heads/master.zip",
-        extensions=(".html", ".xml"),
+        extensions=(".html", ".xml", ".xhtml"),
+        timeout=300,
     )
 
 
@@ -1068,36 +1080,33 @@ def _nl2bash_pipeline(out_dir: Path, logs: Path):
         print("nl2bash: already done, skipping")
         return
 
-    urls = [
-        "https://raw.githubusercontent.com/TellinaTool/nl2bash/master/data/bash_scripts.json",
-        "https://raw.githubusercontent.com/TellinaTool/nl2bash/master/data/all_invocations.json",
-        "https://huggingface.co/datasets/jiacheng-ye/nl2bash/resolve/main/data/train-00000-of-00001.parquet",
-    ]
-    records = []
-    for url in urls:
-        try:
-            print(f"nl2bash: trying {url} ...")
-            with urllib.request.urlopen(url, timeout=30) as resp:
-                content = resp.read()
-            if url.endswith(".parquet"):
-                import pyarrow.parquet as pq
-                table   = pq.read_table(io.BytesIO(content))
-                df      = table.to_pydict()
-                records = [{"nl": n, "bash": b} for n, b in zip(df.get("nl", []), df.get("bash", []))]
-            else:
-                raw = json.loads(content)
+    # Use HF datasets API (no pyarrow dependency, auth handled via HF token)
+    try:
+        from datasets import load_dataset
+        ds = load_dataset("jiacheng-ye/nl2bash", split="train", trust_remote_code=False)
+        records = list(ds)
+        print(f"nl2bash: loaded {len(records)} records from HF")
+    except Exception as e:
+        print(f"nl2bash: HF load failed: {e} — trying GitHub raw ...")
+        records = []
+        urls = [
+            "https://raw.githubusercontent.com/TellinaTool/nl2bash/master/data/bash_scripts.json",
+            "https://raw.githubusercontent.com/TellinaTool/nl2bash/master/data/all_invocations.json",
+        ]
+        for url in urls:
+            try:
+                with urllib.request.urlopen(url, timeout=60) as resp:
+                    raw = json.loads(resp.read())
                 if isinstance(raw, list):
                     records = raw
                 elif isinstance(raw, dict):
                     for v in raw.values():
                         if isinstance(v, dict):
                             records.append({"nl": v.get("cmd_str", ""), "bash": v.get("invocation", "")})
-                        elif isinstance(v, list):
-                            records.extend(v)
-            if records:
-                break
-        except Exception as e:
-            print(f"nl2bash: {url} failed: {e}")
+                if records:
+                    break
+            except Exception as e2:
+                print(f"nl2bash: {url} failed: {e2}")
 
     if not records:
         print("nl2bash: WARNING — all fetch methods failed, skipping")
