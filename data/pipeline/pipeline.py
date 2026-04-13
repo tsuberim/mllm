@@ -134,10 +134,12 @@ def _jupyter_adapter(self, data: dict, path: str, id_in_file: int) -> dict | Non
 def _jupyter_pipeline(out_dir: Path, full: bool, workers: int, logs: Path, limit_override=None):
     cap   = limit_override if limit_override is not None else (None if full else EXPERIMENT_CAPS["jupyter"])
     limit = cap if cap is not None else -1
+    # bigcode/starcoderdata has a single 'default' config containing all languages.
+    # codeparrot/github-jupyter-parsed is a dedicated Jupyter dataset with a 'content' field.
     pipeline = [
         HuggingFaceDatasetReader(
-            dataset="bigcode/starcoderdata",
-            dataset_options={"name": "jupyter-scripts-dedup-filtered", "split": "train"},
+            dataset="codeparrot/github-jupyter-parsed",
+            dataset_options={"split": "train"},
             adapter=_jupyter_adapter,
             streaming=True,
             limit=limit,
