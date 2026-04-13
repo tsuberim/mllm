@@ -1449,7 +1449,8 @@ def main():
             _sicp_pipeline(out_dir, logs_dir)
             continue
         if source == "deepmind_math":
-            _deepmind_math_pipeline(out_dir, logs_dir, limit=args.limit or EXPERIMENT_CAPS.get("deepmind_math"))
+            limit = None if args.full else (args.limit or EXPERIMENT_CAPS.get("deepmind_math"))
+            _deepmind_math_pipeline(out_dir, logs_dir, limit=limit)
             continue
         if source == "tech_docs":
             _tech_docs_pipeline(out_dir, logs_dir)

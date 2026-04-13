@@ -196,6 +196,20 @@ def train(
 )
 def filter_source(commit: str, source: str, full: bool = False, workers: int = 28) -> dict:
     """Download + filter a single source. One Modal container per source, run in parallel."""
+    import random, time as _time
+    # Stagger HF API calls across parallel containers to avoid 429 rate limits.
+    # With ~40 sources in parallel, spreading starts over 120s keeps instantaneous
+    # request rate well under HF's 1000 req/5min quota.
+    _DIRECT_SOURCES = {
+        "wikibooks", "nl2bash", "tldr_pages", "man_pages", "python_docs", "peps", "rfcs",
+        "papers_with_code", "pypi_readmes", "fastai_notebooks", "python_ds_handbook", "sicp",
+        "deepmind_math", "tech_docs", "library_docs",
+    }
+    if source not in _DIRECT_SOURCES:
+        delay = random.uniform(0, 120)
+        print(f"[filter_source:{source}] stagger delay {delay:.0f}s ...")
+        _time.sleep(delay)
+
     repo_dir = _checkout(commit)
     processed_dir = f"{DATA_ROOT}/processed"
     logs_dir      = f"{DATA_ROOT}/pipeline-logs"
