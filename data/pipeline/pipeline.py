@@ -37,8 +37,11 @@ MAX_FILE_BYTES = 1_000_000
 # DataTrove filters out empty-text documents internally.
 _SKIP = {"text": ""}
 
-# ── experiment caps (document count) ─────────────────────────────────────────
-# Experiment caps calibrated to hit ~8B tokens total.
+# ── experiment caps (GLOBAL document count) ──────────────────────────────────
+# These are GLOBAL doc counts (across all workers).
+# DataTrove's HuggingFaceDatasetReader applies `limit` PER WORKER (shard),
+# so each pipeline function must pass `cap // workers` to the reader.
+# Calibrated to hit ~8B tokens total.
 # Derived from real tokens/doc observed on 2026-04-13 full-scale run.
 # Stack v2 tokens/doc are estimated (~1000-1500/doc); all others are real.
 # Non-stack-v2 targets ≈ 30% of observed full-scale.
@@ -124,7 +127,7 @@ def _stack_v2_adapter(self, data: dict, path: str, id_in_file: int) -> dict:
 def _stack_v2_pipeline(source: str, out_dir: Path, full: bool, workers: int, logs: Path, limit_override=None):
     lang  = STACK_V2_LANGS[source]
     cap   = limit_override if limit_override is not None else (None if full else EXPERIMENT_CAPS[source])
-    limit = cap if cap is not None else -1
+    limit = (cap // workers) if cap is not None else -1
     pipeline = [
         HuggingFaceDatasetReader(
             dataset="bigcode/the-stack-v2-dedup",
@@ -162,7 +165,7 @@ def _jupyter_adapter(self, data: dict, path: str, id_in_file: int) -> dict:
 
 def _jupyter_pipeline(out_dir: Path, full: bool, workers: int, logs: Path, limit_override=None):
     cap   = limit_override if limit_override is not None else (None if full else EXPERIMENT_CAPS["jupyter"])
-    limit = cap if cap is not None else -1
+    limit = (cap // workers) if cap is not None else -1
     pipeline = [
         HuggingFaceDatasetReader(
             dataset="codeparrot/github-jupyter-parsed",
@@ -194,7 +197,7 @@ def _rosetta_adapter(self, data: dict, path: str, id_in_file: int) -> dict:
 
 def _rosetta_code_pipeline(out_dir: Path, full: bool, workers: int, logs: Path, limit_override=None):
     cap   = limit_override if limit_override is not None else (None if full else EXPERIMENT_CAPS["rosetta_code"])
-    limit = cap if cap is not None else -1
+    limit = (cap // workers) if cap is not None else -1
     pipeline = [
         HuggingFaceDatasetReader(
             dataset="cakiki/rosetta-code",
@@ -241,7 +244,7 @@ def _so_adapter(self, data: dict, path: str, id_in_file: int) -> dict:
 
 def _stackoverflow_pipeline(out_dir: Path, full: bool, workers: int, logs: Path, limit_override=None):
     cap   = limit_override if limit_override is not None else (None if full else EXPERIMENT_CAPS["stackoverflow"])
-    limit = cap if cap is not None else -1
+    limit = (cap // workers) if cap is not None else -1
     pipeline = [
         HuggingFaceDatasetReader(
             dataset="HuggingFaceH4/stack-exchange-preferences",
@@ -271,7 +274,7 @@ def _se_other_adapter(self, data: dict, path: str, id_in_file: int) -> dict:
 
 def _stack_exchange_other_pipeline(out_dir: Path, full: bool, workers: int, logs: Path, limit_override=None):
     cap   = limit_override if limit_override is not None else (None if full else EXPERIMENT_CAPS["stack_exchange_other"])
-    limit = cap if cap is not None else -1
+    limit = (cap // workers) if cap is not None else -1
     pipeline = [
         HuggingFaceDatasetReader(
             dataset="ArmelR/stack-exchange-instruction",
@@ -301,7 +304,7 @@ def _commits_adapter(self, data: dict, path: str, id_in_file: int) -> dict:
 
 def _github_commits_pipeline(out_dir: Path, full: bool, workers: int, logs: Path, limit_override=None):
     cap   = limit_override if limit_override is not None else (None if full else EXPERIMENT_CAPS["github_commits"])
-    limit = cap if cap is not None else -1
+    limit = (cap // workers) if cap is not None else -1
     pipeline = [
         HuggingFaceDatasetReader(
             dataset="json",
@@ -341,7 +344,7 @@ def _issues_adapter(self, data: dict, path: str, id_in_file: int) -> dict:
 
 def _github_issues_pipeline(out_dir: Path, full: bool, workers: int, logs: Path, limit_override=None):
     cap   = limit_override if limit_override is not None else (None if full else EXPERIMENT_CAPS["github_issues"])
-    limit = cap if cap is not None else -1
+    limit = (cap // workers) if cap is not None else -1
     pipeline = [
         HuggingFaceDatasetReader(
             dataset="bigcode/the-stack-github-issues",
@@ -639,7 +642,7 @@ def _fineweb_adapter(self, data: dict, path: str, id_in_file: int) -> dict:
 
 def _fineweb_edu_pipeline(out_dir: Path, full: bool, workers: int, logs: Path, limit_override=None):
     cap   = limit_override if limit_override is not None else (None if full else EXPERIMENT_CAPS["fineweb_edu"])
-    limit = cap if cap is not None else -1
+    limit = (cap // workers) if cap is not None else -1
     pipeline = [
         HuggingFaceDatasetReader(
             dataset="HuggingFaceFW/fineweb-edu",
@@ -670,7 +673,7 @@ def _arxiv_adapter(self, data: dict, path: str, id_in_file: int) -> dict:
 
 def _arxiv_pipeline(out_dir: Path, full: bool, workers: int, logs: Path, limit_override=None):
     cap   = limit_override if limit_override is not None else (None if full else EXPERIMENT_CAPS["arxiv"])
-    limit = cap if cap is not None else -1
+    limit = (cap // workers) if cap is not None else -1
     # ccdv/arxiv-summarization: clean Parquet, full-text arxiv papers
     # scientific_papers, peS2o, and RedPajama-Data-1T-Sample all use deprecated scripts
     # or don't exist on HF.
@@ -703,7 +706,7 @@ def _wikipedia_adapter(self, data: dict, path: str, id_in_file: int) -> dict:
 
 def _wikipedia_pipeline(out_dir: Path, full: bool, workers: int, logs: Path, limit_override=None):
     cap   = limit_override if limit_override is not None else (None if full else EXPERIMENT_CAPS["wikipedia"])
-    limit = cap if cap is not None else -1
+    limit = (cap // workers) if cap is not None else -1
     pipeline = [
         HuggingFaceDatasetReader(
             dataset="wikimedia/wikipedia",
@@ -733,7 +736,7 @@ def _flan_adapter(self, data: dict, path: str, id_in_file: int) -> dict:
 
 def _flan_v2_pipeline(out_dir: Path, full: bool, workers: int, logs: Path, limit_override=None):
     cap   = limit_override if limit_override is not None else (None if full else EXPERIMENT_CAPS["flan_v2"])
-    limit = cap if cap is not None else -1
+    limit = (cap // workers) if cap is not None else -1
     pipeline = [
         HuggingFaceDatasetReader(
             dataset="Muennighoff/flan",
@@ -776,7 +779,7 @@ def _natural_instructions_adapter(self, data: dict, path: str, id_in_file: int) 
 
 def _natural_instructions_pipeline(out_dir: Path, full: bool, workers: int, logs: Path, limit_override=None):
     cap   = limit_override if limit_override is not None else (None if full else EXPERIMENT_CAPS["natural_instructions"])
-    limit = cap if cap is not None else -1
+    limit = (cap // workers) if cap is not None else -1
     pipeline = [
         HuggingFaceDatasetReader(
             dataset="Muennighoff/natural-instructions",
@@ -814,7 +817,7 @@ def _openhermes_adapter(self, data: dict, path: str, id_in_file: int) -> dict:
 
 def _openhermes_pipeline(out_dir: Path, full: bool, workers: int, logs: Path, limit_override=None):
     cap   = limit_override if limit_override is not None else (None if full else EXPERIMENT_CAPS["openhermes"])
-    limit = cap if cap is not None else -1
+    limit = (cap // workers) if cap is not None else -1
     pipeline = [
         HuggingFaceDatasetReader(
             dataset="teknium/OpenHermes-2.5",
@@ -843,7 +846,7 @@ def _numinamath_adapter(self, data: dict, path: str, id_in_file: int) -> dict:
 
 def _numinamath_pipeline(out_dir: Path, full: bool, workers: int, logs: Path, limit_override=None):
     cap   = limit_override if limit_override is not None else (None if full else EXPERIMENT_CAPS["numinamath"])
-    limit = cap if cap is not None else -1
+    limit = (cap // workers) if cap is not None else -1
     pipeline = [
         HuggingFaceDatasetReader(
             dataset="AI-MO/NuminaMath-CoT",
@@ -875,7 +878,7 @@ def _competition_math_adapter(self, data: dict, path: str, id_in_file: int) -> d
 
 def _competition_math_pipeline(out_dir: Path, full: bool, workers: int, logs: Path, limit_override=None):
     cap   = limit_override if limit_override is not None else (None if full else EXPERIMENT_CAPS["competition_math"])
-    limit = cap if cap is not None else -1
+    limit = (cap // workers) if cap is not None else -1
     # meta-math/MetaMathQA: clean Parquet, 395K augmented math problems
     # lighteval/MATH doesn't exist on Hub
     pipeline = [
@@ -905,7 +908,7 @@ def _proof_pile_adapter(self, data: dict, path: str, id_in_file: int) -> dict:
 
 def _proof_pile_pipeline(out_dir: Path, full: bool, workers: int, logs: Path, limit_override=None):
     cap   = limit_override if limit_override is not None else (None if full else EXPERIMENT_CAPS["proof_pile"])
-    limit = cap if cap is not None else -1
+    limit = (cap // workers) if cap is not None else -1
     # open-web-math/open-web-math: ~15B tokens of math web content, clean Parquet
     # EleutherAI/proof-pile-2 uses a deprecated loading script
     pipeline = [
