@@ -27,11 +27,9 @@ parser.add_argument("--val_steps",  type=int,   required=True)
 parser.add_argument("--save_every", type=int,   required=True)
 parser.add_argument("--eval_every", type=int,   default=None,
                     help="run checkpoint eval every N steps (default: same as save_every)")
-parser.add_argument("--lr",         type=float, default=1e-4,  help="AdamW peak lr (embeddings, norms)")
-parser.add_argument("--lr_muon",    type=float, default=0.002, help="Muon peak lr (2-D weight matrices)")
+parser.add_argument("--lr",         type=float, default=3e-4,  help="AdamW lr (embeddings, norms)")
+parser.add_argument("--lr_muon",    type=float, default=0.02,  help="Muon lr (2-D weight matrices)")
 parser.add_argument("--grad_clip",  type=float, default=1.0)
-parser.add_argument("--plateau_patience", type=int,   default=500,  help="training steps with no improvement in train loss before LR decay (0 = disabled)")
-parser.add_argument("--plateau_factor",   type=float, default=0.25, help="multiply LR by this on plateau")
 parser.add_argument("--wandb",      choices=["online", "disabled"], default="online")
 parser.add_argument("--bf16",             action="store_true", help="cast model to bfloat16 (required for ~7B on single GPU)")
 parser.add_argument("--grad_checkpoint",  action="store_true", help="gradient checkpointing (saves activation memory; enables large batches on big models)")
@@ -180,8 +178,6 @@ def save_checkpoint(step):
         "model":      model.state_dict(),
         "optim_muon": optim_muon.state_dict() if optim_muon else None,
         "optim_adam": optim_adam.state_dict(),
-        "sched_adam": _sched_adam.state_dict() if _sched_adam else None,
-        "sched_muon": _sched_muon.state_dict() if _sched_muon else None,
     }
     buf = io.BytesIO()
     torch.save(ckpt, buf)
@@ -214,18 +210,8 @@ def load_checkpoint():
             optim_muon.load_state_dict(ckpt["optim_muon"])
         if ckpt.get("optim_adam"):
             optim_adam.load_state_dict(ckpt["optim_adam"])
-        if _sched_adam and ckpt.get("sched_adam"):
-            _sched_adam.load_state_dict(ckpt["sched_adam"])
-            _sched_muon.load_state_dict(ckpt["sched_muon"])
         start_step = ckpt["step"] + 1
         print(f"resumed from step {start_step}")
-
-# ── lr schedule ───────────────────────────────────────────────────────────────
-_sched_adam = _sched_muon = None
-if args.plateau_patience > 0:
-    _kw = dict(mode="min", factor=args.plateau_factor, patience=args.plateau_patience)
-    _sched_adam = torch.optim.lr_scheduler.ReduceLROnPlateau(optim_adam, **_kw)
-    _sched_muon = torch.optim.lr_scheduler.ReduceLROnPlateau(optim_muon, **_kw) if optim_muon else None
 
 if args.resume:
     load_checkpoint()
@@ -240,16 +226,8 @@ wandb.init(
     config={**model_cfg.__dict__, "batch_size": args.batch_size,
             "lr": args.lr, "lr_muon": args.lr_muon,
             "weight_decay": 0.01,
-            "plateau_patience": args.plateau_patience, "plateau_factor": args.plateau_factor,
             "max_steps": args.max_steps, "device": device},
 )
-
-def maybe_decay_lr(val_loss):
-    if _sched_adam is None:
-        return
-    _sched_adam.step(val_loss)
-    if _sched_muon:
-        _sched_muon.step(val_loss)
 
 def current_lrs():
     lr_muon = optim_muon.param_groups[0]["lr"] if optim_muon else 0.0
@@ -273,7 +251,6 @@ for step in pbar:
     if optim_muon:
         optim_muon.step()
     optim_adam.step()
-    maybe_decay_lr(loss.item())
     _lr_now, _lr_muon_now = current_lrs()
     log = {"train/loss": loss.item(), "train/grad_norm": grad_norm,
            "train/lr": _lr_now, "train/lr_muon": _lr_muon_now}

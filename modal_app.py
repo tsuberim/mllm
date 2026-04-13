@@ -114,8 +114,6 @@ def train(
     save_every: int = 1000,
     bf16: bool = True,
     grad_checkpoint: bool = False,
-    plateau_patience: int = 500,
-    plateau_factor: float = 0.25,
     resume: bool = False,
     no_muon: bool = False,
     tag: str = "",
@@ -145,9 +143,6 @@ def train(
         cmd.append("--bf16")
     if grad_checkpoint:
         cmd.append("--grad_checkpoint")
-    if plateau_patience > 0:
-        cmd += ["--plateau_patience", str(plateau_patience),
-                "--plateau_factor",   str(plateau_factor)]
     if resume:
         cmd.append("--resume")
     if no_muon:
@@ -1131,8 +1126,6 @@ def main(
     save_every: int = 1000,
     bf16: bool = True,
     grad_checkpoint: bool = False,
-    plateau_patience: int = 500,
-    plateau_factor: float = 0.25,
     resume: bool = False,
     no_muon: bool = False,
     tag: str = "",
@@ -1161,8 +1154,6 @@ def main(
         save_every=save_every,
         bf16=bf16,
         grad_checkpoint=grad_checkpoint,
-        plateau_patience=plateau_patience,
-        plateau_factor=plateau_factor,
         resume=resume,
         no_muon=no_muon,
         tag=tag,
