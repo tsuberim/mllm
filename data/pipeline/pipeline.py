@@ -617,24 +617,24 @@ def _fineweb_edu_pipeline(out_dir: Path, full: bool, workers: int, logs: Path, l
 # ── ArXiv CS ──────────────────────────────────────────────────────────────────
 
 def _arxiv_adapter(self, data: dict, path: str, id_in_file: int) -> dict:
-    abstract = (data.get("abstract") or "").strip()
-    article  = (data.get("article") or "").strip()
-    if not article and not abstract:
+    # allenai/peS2o schema: text, id, title, year
+    text = (data.get("text") or "").strip()
+    if not text:
         return _SKIP
-    text = f"{abstract}\n\n{article}".strip() if abstract else article
     return {
         "text": text[:MAX_FILE_BYTES],
-        "id":   str(id_in_file),
+        "id":   data.get("id") or str(id_in_file),
         "metadata": {},
     }
 
 def _arxiv_pipeline(out_dir: Path, full: bool, workers: int, logs: Path, limit_override=None):
     cap   = limit_override if limit_override is not None else (None if full else EXPERIMENT_CAPS["arxiv"])
     limit = cap if cap is not None else -1
+    # allenai/peS2o: S2ORC scientific papers, clean parquet format, no loading script
     pipeline = [
         HuggingFaceDatasetReader(
-            dataset="scientific_papers",
-            dataset_options={"name": "arxiv", "split": "train", "trust_remote_code": True},
+            dataset="allenai/peS2o",
+            dataset_options={"split": "train"},
             adapter=_arxiv_adapter,
             streaming=True,
             limit=limit,
