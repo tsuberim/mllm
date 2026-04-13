@@ -102,18 +102,22 @@ EXPERIMENT_CAPS = {
     "library_docs":            None,   # broken — fix separately
 }
 
-# ── Stack v2 ──────────────────────────────────────────────────────────────────
+# ── Stack (the-stack-dedup, v1 near-dedup) ────────────────────────────────────
+# bigcode/the-stack-v2-dedup stores content in SWH blob store — not accessible
+# via HF streaming. the-stack-dedup (v1) has identical language coverage, richer
+# quality signals (max_stars_count, max_issues_count, max_forks_count,
+# alphanum_fraction), and content directly in parquet. Same hexsha ID field.
 
 STACK_V2_LANGS = {
-    "stack_v2_python":     "Python",
-    "stack_v2_ts":         "TypeScript",
-    "stack_v2_go":         "Go",
-    "stack_v2_rust":       "Rust",
-    "stack_v2_bash":       "Shell",
-    "stack_v2_yaml":       "YAML",
-    "stack_v2_dockerfile": "Dockerfile",
-    "stack_v2_sql":        "SQL",
-    "stack_v2_md":         "Markdown",
+    "stack_v2_python":     "python",
+    "stack_v2_ts":         "typescript",
+    "stack_v2_go":         "go",
+    "stack_v2_rust":       "rust",
+    "stack_v2_bash":       "shell",
+    "stack_v2_yaml":       "yaml",
+    "stack_v2_dockerfile": "dockerfile",
+    "stack_v2_sql":        "sql",
+    "stack_v2_md":         "markdown",
 }
 
 def _stack_v2_adapter(self, data: dict, path: str, id_in_file: int) -> dict:
@@ -132,8 +136,8 @@ def _stack_v2_pipeline(source: str, out_dir: Path, full: bool, workers: int, log
     limit = (cap // workers) if cap is not None else -1
     pipeline = [
         HuggingFaceDatasetReader(
-            dataset="bigcode/the-stack-v2-dedup",
-            dataset_options={"name": lang, "split": "train"},
+            dataset="bigcode/the-stack-dedup",
+            dataset_options={"data_dir": f"data/{lang}", "split": "train"},
             adapter=_stack_v2_adapter,
             streaming=True,
             limit=limit,

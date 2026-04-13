@@ -434,6 +434,36 @@ def build_corpus(
 
 
 @app.function(
+    image=pipeline_image,
+    cpu=2,
+    memory=4096,
+    timeout=300,
+    secrets=[modal.Secret.from_name("merlin")],
+)
+def diagnose_stack_v2(lang: str = "Python"):
+    """Compare bigcode/the-stack (v1) vs the-stack-v2-dedup schema — verify content accessibility."""
+    import os
+    from datasets import load_dataset
+
+    token = os.environ.get("HF_TOKEN")
+
+    for dataset_name in ["bigcode/the-stack", "bigcode/the-stack-v2-dedup"]:
+        print(f"\n=== {dataset_name}, name={lang!r}, streaming=True ===")
+        try:
+            ds = load_dataset(dataset_name, name=lang, split="train",
+                              streaming=True, token=token)
+            row = next(iter(ds))
+            print(f"Keys: {list(row.keys())}")
+            content = row.get("content", "<MISSING>")
+            if content and content != "<MISSING>":
+                print(f"content[:200]: {content[:200]!r}")
+            else:
+                print(f"content field: {content!r}")
+        except Exception as e:
+            print(f"ERROR: {e}")
+
+
+@app.function(
     image=image,
     volumes={DATA_ROOT: vol},
     timeout=60 * 60,
