@@ -190,7 +190,16 @@ def _github_issues_pipeline(out_dir: Path, full: bool, workers: int, logs: Path,
 
 def _jupyter_adapter(self, data: dict, path: str, id_in_file: int) -> dict | None:
     try:
-        cells = data.get("cells") or []
+        # codeparrot/github-jupyter-parsed stores the notebook as raw JSON in "content"
+        raw = data.get("cells") or data.get("content") or ""
+        if isinstance(raw, str):
+            try:
+                parsed = json.loads(raw)
+                cells = parsed.get("cells") or [] if isinstance(parsed, dict) else []
+            except Exception:
+                return None
+        else:
+            cells = raw if isinstance(raw, list) else []
         parts = []
         for cell in cells:
             try:
