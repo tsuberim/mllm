@@ -315,7 +315,17 @@ def tokenize_phase2(commit: str) -> dict:
 )
 def build_corpus(
     commit: str,
-    sources: str = "stack_python,stack_bash,stack_md,stackoverflow,github_commits,github_issues,jupyter,nl2bash",
+    sources: str = (
+        "stack_v2_python,stack_v2_ts,stack_v2_go,stack_v2_rust,stack_v2_bash,"
+        "stack_v2_yaml,stack_v2_dockerfile,stack_v2_sql,stack_v2_md,"
+        "jupyter,rosetta_code,"
+        "stackoverflow,stack_exchange_other,"
+        "github_commits,github_issues,"
+        "tldr_pages,"
+        "fineweb_edu,arxiv,wikipedia,"
+        "flan_v2,natural_instructions,openhermes,nl2bash,"
+        "numinamath,competition_math,proof_pile"
+    ),
     full: bool = False,
     workers: int = 28,
     hf_corpus_repo: str = "tsuberim/merlin-corpus-v1",
@@ -615,14 +625,24 @@ def sft_entrypoint(
 @app.local_entrypoint()
 def build_corpus_entrypoint(
     commit: str = "",
-    sources: str = "stack_python,stack_bash,stack_md,stackoverflow,github_commits,github_issues,jupyter,nl2bash",
+    sources: str = (
+        "stack_v2_python,stack_v2_ts,stack_v2_go,stack_v2_rust,stack_v2_bash,"
+        "stack_v2_yaml,stack_v2_dockerfile,stack_v2_sql,stack_v2_md,"
+        "jupyter,rosetta_code,"
+        "stackoverflow,stack_exchange_other,"
+        "github_commits,github_issues,"
+        "tldr_pages,"
+        "fineweb_edu,arxiv,wikipedia,"
+        "flan_v2,natural_instructions,openhermes,nl2bash,"
+        "numinamath,competition_math,proof_pile"
+    ),
     full: bool = False,
     workers: int = 28,
     hf_corpus_repo: str = "tsuberim/merlin-corpus-v1",
 ):
     """
     Launch corpus pipeline on Modal CPU machine.
-        modal run modal_app.py::build_corpus_entrypoint [--full] [--sources stack_python,...]
+        modal run modal_app.py::build_corpus_entrypoint [--full] [--sources stack_v2_python,...]
     """
     if not commit:
         commit = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
