@@ -105,4 +105,4 @@ pip install -r requirements.txt
 
 ## License
 
-MIT
+[CC BY-NC 4.0](LICENSE) — free for non-commercial use. Commercial use requires a separate license.
