@@ -206,6 +206,8 @@ def _jupyter_adapter(self, data: dict, path: str, id_in_file: int) -> dict | Non
         if ctype == "code":
             parts.append(src)
             for out in (cell.get("outputs") or []):
+                if not isinstance(out, dict):
+                    continue
                 text = out.get("text") or out.get("data", {}).get("text/plain") or []
                 text = "".join(text).strip()
                 if text:
