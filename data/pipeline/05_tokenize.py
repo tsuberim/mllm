@@ -102,7 +102,8 @@ def _tokenize_shard(args) -> tuple[int, int]:
                 while i < len(tokens):
                     chunk = tokens[i:i + seq_len]
                     if i + seq_len >= len(tokens):
-                        chunk = chunk + [eos_id]
+                        # last chunk: cap at seq_len - 1 so EOS fits
+                        chunk = chunk[:seq_len - 1] + [eos_id]
                     arr = np.array(chunk, dtype=np.uint16)
                     tok_out.write(arr.tobytes())
                     idx_out.write(struct.pack("<I", len(arr)))
@@ -226,6 +227,8 @@ def _pack_corpus(
                 if mmap is None:
                     continue
                 tok_offset = int(offset) // 2  # bytes → uint16 elements
+                # clamp: phase-1 bug could produce length == seq_len+1
+                length = min(length, seq_len)
                 doc_tokens = mmap[tok_offset:tok_offset + length]
 
                 if length > seq_len - pos:
