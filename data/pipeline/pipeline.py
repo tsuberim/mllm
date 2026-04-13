@@ -242,8 +242,11 @@ def _so_adapter(self, data: dict, path: str, id_in_file: int) -> dict:
     if not answer:
         return _SKIP
     question = _strip_html(data.get("question") or "")
+    text = f"Q: {question}\n\nA: {answer}"
+    # Strip lone surrogates that cause UTF-8 serialization failures
+    text = text.encode("utf-8", "replace").decode("utf-8")
     return {
-        "text": f"Q: {question}\n\nA: {answer}",
+        "text": text,
         "id":   str(id_in_file),
         "metadata": {},
     }
