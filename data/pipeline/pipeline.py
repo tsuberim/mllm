@@ -505,7 +505,7 @@ def _nl2bash_pipeline(out_dir: Path, workers: int, logs: Path, limit_override=No
         HuggingFaceDatasetReader(
             # jiacheng-ye/nl2bash: Lin et al. 2018, ~9.3K NL→bash pairs (MIT)
             dataset="jiacheng-ye/nl2bash",
-            dataset_options={"split": "train+validation+test"},
+            dataset_options={"split": "train+validation+test", "trust_remote_code": True},
             adapter=_adapter,
             streaming=True,
             limit=limit_override if limit_override is not None else -1,
