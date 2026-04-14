@@ -354,8 +354,8 @@ def clear_sources(sources: str):
 
 @app.function(
     image=pipeline_image,
-    cpu=2,
-    memory=2048,
+    cpu=4,
+    memory=32768,  # phase 2 needs same resources as tokenize_phase2
     volumes={DATA_ROOT: vol},
     timeout=60 * 60 * 12,
     secrets=[modal.Secret.from_name("merlin")],
@@ -368,12 +368,32 @@ def repack(
     """
     Re-run phase 2b (global pack) + upload, using whatever .tok shards exist on the volume.
     Use this after adding a new source (filter + tokenize_phase1 it separately, then repack).
+    Runs the pack subprocess inline (not via .remote()) so local client disconnect can't kill it.
     """
     import time
     t0 = time.time()
 
+    repo_dir = _checkout(commit)
+    vol.reload()
+
     print("\n[repack] step 2b: tokenize phase 2 (global pack)")
-    tokenize_phase2.remote(commit)
+    tokenized_dir = f"{DATA_ROOT}/tokenized-new"
+    tok_dir       = f"{DATA_ROOT}/tokenizer"
+    env = {**os.environ, "HF_HOME": HF_HOME}
+    cmd = [
+        sys.executable, "-u", f"{repo_dir}/data/pipeline/05_tokenize.py",
+        "--in", f"{DATA_ROOT}/processed", "--tok", tok_dir, "--out", tokenized_dir,
+        "--phase", "2",
+    ]
+    print("[tokenize_phase2] starting")
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                            cwd=repo_dir, env=env)
+    for line in proc.stdout:
+        print(line.decode("utf-8", errors="replace"), end="", flush=True)
+    proc.wait()
+    if proc.returncode != 0:
+        raise RuntimeError(f"05_tokenize.py phase2 exited {proc.returncode}")
+    vol.commit()
     print(f"[repack] step 2b done  ({time.time()-t0:.0f}s)")
 
     vol.reload()
